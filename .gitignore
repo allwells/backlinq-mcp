@@ -14,3 +14,8 @@ dist/
 .DS_Store
 *.log
 
+.agent/
+.claude/
+.context.md
+AGENTS.md
+CLAUDE.md

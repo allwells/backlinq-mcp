@@ -1,0 +1,12 @@
+node_modules
+dist
+.env*
+tests
+*.md
+.git
+.gitignore
+.agent/
+.claude/
+.context.md
+AGENTS.md
+CLAUDE.md
