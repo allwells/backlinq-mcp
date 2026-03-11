@@ -1,0 +1,14 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # every 10 minutes
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping MCP health check
+        run: curl https://mcp.backlinq.dev/health
+      - name: Ping API health check
+        run: curl https://api.backlinq.dev/health

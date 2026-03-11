@@ -1,0 +1,46 @@
+// Read-only mirror of backlinq-app schema — do not migrate from this project
+// Run migrations from backlinq-app only. Only run `bunx prisma generate` here.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String        @id
+  email        String        @unique
+  apiKeys      ApiKey[]
+  subscription Subscription?
+}
+
+model ApiKey {
+  id             String    @id
+  userId         String
+  keyHash        String    @unique
+  prefix         String
+  active         Boolean
+  currentUsage   Int
+  cycleStartedAt DateTime
+  lastUsedAt     DateTime?
+  createdAt      DateTime
+  user           User      @relation(fields: [userId], references: [id])
+}
+
+model Subscription {
+  id     String @id
+  userId String @unique
+  plan   String
+  status String
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model Usage {
+  id         String   @id @default(cuid())
+  userId     String
+  endpoint   String
+  statusCode Int
+  createdAt  DateTime @default(now())
+}
