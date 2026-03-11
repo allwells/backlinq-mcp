@@ -128,18 +128,6 @@ GET /health
 | Source | Data | Cost |
 |--------|------|------|
 | Open PageRank | PageRank score (0–10) | Free |
-| Moz API | Domain Authority, Spam Score | Free tier |
+| Moz API | Domain Authority, Spam Score | Paid |
 | DataForSEO | Backlinks, referring domains (primary) | Paid |
 | Common Crawl | Backlinks, referring domains (fallback) | Free |
-
----
-
-## Related
-
-- [backlinq-app](https://github.com/allwells/backlinq-app) — Web dashboard
-
----
-
-## License
-
-MIT
