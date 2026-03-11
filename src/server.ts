@@ -7,9 +7,6 @@ import { registerDomainAuthorityTool } from "./tools/domainAuthority.js";
 import { registerReferringDomainsTool } from "./tools/referringDomains.js";
 import { registerCompareDomainsTool } from "./tools/compareDomains.js";
 import type { Request, Response } from "express";
-import { rateLimiter } from "./middleware/rateLimit.js";
-import { apiKeyMiddleware } from "./middleware/apiKey.js";
-import { apiRouter } from "./routes/api.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -54,13 +51,8 @@ export async function startServer(): Promise<void> {
 
   // Health check endpoint — used by Railway/Render to confirm the service is up
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok", service: "backlinq", version: "1.0.0" });
+    res.json({ status: "OK", service: "Backlinq MCP", version: "1.0.0" });
   });
-
-  // REST API layer — rate limit then dual auth then routes
-  app.use("/api", rateLimiter);
-  app.use("/api", apiKeyMiddleware);
-  app.use("/api", apiRouter);
 
   app.listen(PORT, () => {
     process.stderr.write(`Backlinq MCP server running on port ${PORT}\n`);

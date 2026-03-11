@@ -1,11 +1,13 @@
 // Tool: get_backlink_profile
-// Adapters: openPageRank + commonCrawl (parallel)
+// Primary: DataForSEO backlinks API
+// Fallback: Common Crawl CDX index (for domains not in DataForSEO)
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { BacklinkProfile, McpError } from "../types/index.js";
+import type { BacklinkProfile, BacklinkEntry, McpError } from "../types/index.js";
 import { getDomainPageRank } from "../adapters/openPageRank.js";
+import { getBacklinkProfile as getDataForSeoProfile } from "../adapters/dataForSeo.js";
 import { getBacklinksFromCrawl } from "../adapters/commonCrawl.js";
 import {
   cleanDomain,
@@ -33,10 +35,14 @@ const inputSchema = {
 };
 
 const backlinkEntrySchema = z.object({
-  url: z.string().describe("URL of the crawled page that links to the domain."),
-  timestamp: z.string().describe("Crawl timestamp in YYYYMMDDHHmmss format."),
-  status: z.string().describe("HTTP status code of the crawled page."),
-  source: z.literal("commoncrawl"),
+  url: z.string().describe("URL of the page linking to the domain."),
+  timestamp: z.string().describe("Crawl or last-seen timestamp."),
+  status: z
+    .string()
+    .describe("HTTP status code, or '200' when unavailable from source."),
+  source: z
+    .enum(["commoncrawl", "dataforseo"])
+    .describe("Data source that provided this backlink."),
 });
 
 const outputSchema = {
@@ -44,8 +50,8 @@ const outputSchema = {
   note: z
     .string()
     .optional()
-    .describe("Note regarding subdomains or fallback logic."),
-  pageRank: z.number().describe("Open PageRank score."),
+    .describe("Note regarding data source or fallback behaviour."),
+  pageRank: z.number().describe("Open PageRank score (0–10)."),
   rank: z.string().describe("Global rank position from Open PageRank."),
   domainAuthority: z
     .string()
@@ -54,13 +60,13 @@ const outputSchema = {
     ),
   totalBacklinks: z
     .number()
-    .describe("Number of backlink records returned from Common Crawl."),
+    .describe("Total backlink count reported by the data source."),
   referringDomainsCount: z
     .number()
-    .describe("Count of unique referring domains in the returned backlinks."),
+    .describe("Unique referring domains in the returned set."),
   topBacklinks: z
     .array(backlinkEntrySchema)
-    .describe("List of backlink entries from the Common Crawl index."),
+    .describe("Sampled backlink entries."),
 };
 
 export function registerBacklinkProfileTool(server: McpServer): void {
@@ -68,55 +74,128 @@ export function registerBacklinkProfileTool(server: McpServer): void {
     TOOL_NAME,
     {
       description:
-        "Get the full backlink profile for a domain: page rank, total backlinks found, unique referring domains, and a list of top backlinks from the Common Crawl index.",
+        "Get the full backlink profile for a domain: page rank, total backlinks, unique referring domains, and a list of top backlinks. Uses DataForSEO as primary source with Common Crawl as fallback.",
       inputSchema,
       outputSchema,
     },
     async (args) => {
-      let rankResult;
       try {
-        assertValidDomain(args.domain); // Validate raw input FIRST, before any cleaning
+        assertValidDomain(args.domain);
         const domain = cleanDomain(args.domain);
         const limit = args.limit ?? DEFAULT_LIMIT;
-        logger.info(
-          `get_backlink_profile called for: ${domain} (limit=${limit})`,
-        );
+        logger.info(`get_backlink_profile called for: ${domain} (limit=${limit})`);
 
-        rankResult = await getDomainPageRank(domain);
-        let backlinks;
+        // Fire PageRank and DataForSEO in parallel
+        const [rankSettled, dfsSettled] = await Promise.allSettled([
+          getDomainPageRank(domain),
+          getDataForSeoProfile(domain, limit),
+        ]);
+
+        if (rankSettled.status === "rejected") {
+          throw rankSettled.reason instanceof Error
+            ? rankSettled.reason
+            : new Error(String(rankSettled.reason));
+        }
+
+        const rankResult = rankSettled.value;
+        let backlinks: BacklinkEntry[];
+        let totalBacklinks: number;
+        let referringDomainsCount: number;
         let note: string | undefined;
 
-        try {
-          backlinks = await getBacklinksFromCrawl(domain, limit);
-        } catch (crawlErr: any) {
-          const isSubdomain = extractRootDomain(domain) !== domain;
-          if (isSubdomain) {
-            const root = extractRootDomain(domain);
+        // ── Primary: DataForSEO ──────────────────────────────────────────────
+        if (
+          dfsSettled.status === "fulfilled" &&
+          dfsSettled.value.topBacklinks.length > 0
+        ) {
+          const dfs = dfsSettled.value;
+          backlinks = dfs.topBacklinks.map((b) => ({
+            url: b.url,
+            timestamp: b.lastSeen,
+            status: "200",
+            source: "dataforseo" as const,
+          }));
+          totalBacklinks = dfs.totalBacklinks;
+          referringDomainsCount = dfs.referringDomains;
+          logger.info(
+            `get_backlink_profile: DataForSEO found ${totalBacklinks} total backlinks for ${domain}`,
+          );
+        } else {
+          // ── Fallback: Common Crawl ─────────────────────────────────────────
+          if (dfsSettled.status === "fulfilled") {
             logger.info(
-              `No backlinks found for subdomain ${domain}. Falling back to root domain: ${root}`,
+              `get_backlink_profile: DataForSEO returned 0 results for ${domain}, trying Common Crawl`,
             );
-            try {
-              backlinks = await getBacklinksFromCrawl(root, limit);
-              note = "No subdomain data found, showing root domain results";
-            } catch (fallbackErr: any) {
-              // Even the root is empty
-              throw new Error(
-                `Common Crawl found no backlink data for ${domain} or root domain ${root}. ` +
-                  `However, Open PageRank data is available: PR ${rankResult.pageRank} (Rank: ${rankResult.rank}). ` +
-                  `Original Crawl Error: ${crawlErr.message}`,
-              );
-            }
           } else {
-            throw new Error(
-              `Common Crawl found no backlink data for ${domain}. ` +
-                `However, Open PageRank data is available: PR ${rankResult.pageRank} (Rank: ${rankResult.rank}). ` +
-                `Original Crawl Error: ${crawlErr.message}`,
+            const reason = dfsSettled.reason;
+            logger.warn(
+              `get_backlink_profile: DataForSEO failed for ${domain} (${reason instanceof Error ? reason.message : String(reason)}), trying Common Crawl`,
             );
+          }
+
+          // Helper — attempt a crawl fetch, return null on failure
+          const tryCrawl = async (
+            target: string,
+          ): Promise<BacklinkEntry[] | null> => {
+            try {
+              return await getBacklinksFromCrawl(target, limit);
+            } catch {
+              return null;
+            }
+          };
+
+          let crawlBacklinks = await tryCrawl(domain);
+          let usedRoot = false;
+
+          if (!crawlBacklinks) {
+            const isSubdomain = extractRootDomain(domain) !== domain;
+            if (isSubdomain) {
+              const root = extractRootDomain(domain);
+              logger.info(
+                `get_backlink_profile: trying root domain ${root} in Common Crawl`,
+              );
+              crawlBacklinks = await tryCrawl(root);
+              if (crawlBacklinks) usedRoot = true;
+            }
+          }
+
+          if (!crawlBacklinks) {
+            const error = formatError(
+              "NO_BACKLINK_DATA",
+              "No backlink records found for this domain in available data sources.",
+            );
+            return {
+              content: [
+                { type: "text" as const, text: JSON.stringify(error) },
+              ],
+              isError: true,
+            } as unknown as CallToolResult;
+          }
+
+          backlinks = crawlBacklinks;
+          totalBacklinks = crawlBacklinks.length;
+          referringDomainsCount = new Set(
+            crawlBacklinks.map((b) => {
+              try {
+                return new URL(b.url).hostname;
+              } catch {
+                return b.url;
+              }
+            }),
+          ).size;
+
+          if (usedRoot) {
+            note = "No subdomain data found, showing root domain results";
+          } else if (dfsSettled.status === "fulfilled") {
+            note = "DataForSEO returned no results; showing Common Crawl data";
           }
         }
 
         const output: BacklinkProfile & { note?: string } = {
-          ...formatBacklinkProfile(domain, rankResult, backlinks),
+          ...formatBacklinkProfile(domain, rankResult, backlinks, {
+            totalBacklinks,
+            referringDomainsCount,
+          }),
           note,
         };
 

@@ -22,6 +22,7 @@ export function formatBacklinkProfile(
   domain: string,
   rankResult: DomainRankResult,
   backlinks: readonly BacklinkEntry[],
+  counts?: { totalBacklinks?: number; referringDomainsCount?: number },
 ): BacklinkProfile {
   const uniqueDomains = new Set(
     backlinks.map((b) => {
@@ -44,8 +45,8 @@ export function formatBacklinkProfile(
         ? String((rankResult.rank as any).value || rankResult.rank)
         : String(rankResult.rank),
     domainAuthority: DA_NOT_FETCHED_MSG,
-    totalBacklinks: backlinks.length,
-    referringDomainsCount: uniqueDomains.size,
+    totalBacklinks: counts?.totalBacklinks ?? backlinks.length,
+    referringDomainsCount: counts?.referringDomainsCount ?? uniqueDomains.size,
     topBacklinks: backlinks,
   };
 }

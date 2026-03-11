@@ -4,7 +4,7 @@ node_modules/
 # Build output
 dist/
 
-# Environment secrets — NEVER commit
+# Environment secrets
 .env
 
 # Source maps
@@ -19,3 +19,4 @@ dist/
 .context.md
 AGENTS.md
 CLAUDE.md
+DOCS.md

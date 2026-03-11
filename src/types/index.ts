@@ -85,7 +85,7 @@ export interface BacklinkEntry {
   readonly url: string;
   readonly timestamp: string;
   readonly status: string;
-  readonly source: "commoncrawl";
+  readonly source: "commoncrawl" | "dataforseo";
 }
 
 // ─── Referring Domains ────────────────────────────────────────────────────────
@@ -94,7 +94,9 @@ export interface ReferringDomain {
   readonly domain: string;
   readonly exampleUrl: string;
   readonly lastSeen: string;
-  readonly source: "commoncrawl";
+  readonly source: "commoncrawl" | "dataforseo";
+  readonly backlinkCount?: number;
+  readonly dofollowCount?: number;
 }
 
 // ─── Top-level Tool Output Types ─────────────────────────────────────────────
@@ -230,22 +232,6 @@ export interface DataForSeoReferringDomain {
   readonly dofollow_links: number;
   readonly first_seen: string;
   readonly last_seen: string;
-}
-
-// ─── REST API — Compare Domains Leaderboard ──────────────────────────────────
-
-export interface LeaderboardEntry {
-  readonly rank: number;
-  readonly domain: string;
-  readonly pageRank: number;
-  readonly domainAuthority: number;
-  readonly spamScore: number;
-  readonly linksIn?: number;
-}
-
-export interface CompareDomainsRestOutput {
-  readonly domains: readonly string[];
-  readonly leaderboard: readonly LeaderboardEntry[];
 }
 
 /** DataForSEO domain metrics result */
