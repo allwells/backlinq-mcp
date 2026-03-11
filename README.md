@@ -65,7 +65,7 @@ PORT=3000
 bun run dev
 ```
 
-Server starts at `http://localhost:3000`. The MCP endpoint is `POST /mcp`.
+Server starts at `http://localhost:3001`. The MCP endpoint is `POST /mcp`.
 
 ### 4. Build for production
 
