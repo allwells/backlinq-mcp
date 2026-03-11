@@ -41,6 +41,9 @@ cp .env.example .env
 Open `.env` and fill in your keys:
 
 ```env
+# CTX Protocol — https://ctxprotocol.com account dashboard
+CTX_API_KEY=your_ctx_api_key_here
+
 # Open PageRank — https://www.domcop.com/openpagerank/
 OPEN_PAGERANK_API_KEY=your_key_here
 
@@ -48,15 +51,12 @@ OPEN_PAGERANK_API_KEY=your_key_here
 MOZ_ACCESS_ID=your_access_id_here
 MOZ_SECRET_KEY=your_secret_key_here
 
-# CTX Protocol — https://ctxprotocol.com account dashboard
-CTX_API_KEY=your_ctx_api_key_here
-
 # DataForSEO (optional — enables richer backlink data)
 DATAFORSEO_LOGIN=your_login_here
 DATAFORSEO_PASSWORD=your_password_here
 
-# Server port (default: 3000)
-PORT=3000
+# Server port (default: 8000)
+PORT=8000
 ```
 
 ### 3. Run locally
@@ -65,7 +65,7 @@ PORT=3000
 bun run dev
 ```
 
-Server starts at `http://localhost:3001`. The MCP endpoint is `POST /mcp`.
+Server starts at `http://localhost:8000`. The MCP endpoint is `POST /mcp`.
 
 ### 4. Build for production
 
@@ -118,7 +118,7 @@ src/
 
 ```
 GET /health
-→ { "status": "ok", "service": "backlinq", "version": "1.0.0" }
+→ { "status": "OK", "service": "Backlinq MCP", "version": "1.0.0" }
 ```
 
 ---

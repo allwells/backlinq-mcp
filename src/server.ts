@@ -8,11 +8,11 @@ import { registerReferringDomainsTool } from "./tools/referringDomains.js";
 import { registerCompareDomainsTool } from "./tools/compareDomains.js";
 import type { Request, Response } from "express";
 
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 8000;
 
 export function createServer(): McpServer {
   const server = new McpServer({
-    name: "backlinq",
+    name: "Backlinq",
     version: "1.0.0",
   });
 
