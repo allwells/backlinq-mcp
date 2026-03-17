@@ -1,13 +1,12 @@
 // Tool: get_backlink_profile
-// Primary: DataForSEO backlinks API
-// Fallback: Common Crawl CDX index (for domains not in DataForSEO)
+// Primary: Moz /v2/links + url_metrics
+// Fallback: Common Crawl CDX index (cached 24h)
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { BacklinkProfile, BacklinkEntry, McpError } from "../types/index.js";
-import { getDomainPageRank } from "../adapters/openPageRank.js";
-import { getBacklinkProfile as getDataForSeoProfile } from "../adapters/dataForSeo.js";
+import { getMozMetrics, getMozLinks } from "../adapters/moz.js";
 import { getBacklinksFromCrawl } from "../adapters/commonCrawl.js";
 import {
   cleanDomain,
@@ -36,12 +35,14 @@ const inputSchema = {
 
 const backlinkEntrySchema = z.object({
   url: z.string().describe("URL of the page linking to the domain."),
-  timestamp: z.string().describe("Crawl or last-seen timestamp."),
+  timestamp: z.string().describe("Crawl or index timestamp (ISO or YYYYMMDDHHMMSS)."),
   status: z
     .string()
-    .describe("HTTP status code, or '200' when unavailable from source."),
+    .describe(
+      "HTTP status code from source, 'N/A' when the data source does not provide it.",
+    ),
   source: z
-    .enum(["commoncrawl", "dataforseo"])
+    .enum(["commoncrawl", "dataforseo", "moz"])
     .describe("Data source that provided this backlink."),
 });
 
@@ -51,8 +52,8 @@ const outputSchema = {
     .string()
     .optional()
     .describe("Note regarding data source or fallback behaviour."),
-  pageRank: z.number().describe("Open PageRank score (0–10)."),
-  rank: z.string().describe("Global rank position from Open PageRank."),
+  pageRank: z.number().describe("MozRank score (0–10)."),
+  rank: z.string().describe("MozRank tier (Top Tier / High / Mid / Low / Minimal)."),
   domainAuthority: z
     .string()
     .describe(
@@ -69,12 +70,21 @@ const outputSchema = {
     .describe("Sampled backlink entries."),
 };
 
+/** Convert MozRank to the rank tier string used across tools. */
+function mozRankToTier(mozRank: number): string {
+  if (mozRank >= 8) return "Top Tier";
+  if (mozRank >= 6) return "High";
+  if (mozRank >= 4) return "Mid";
+  if (mozRank >= 2) return "Low";
+  return "Minimal";
+}
+
 export function registerBacklinkProfileTool(server: McpServer): void {
   server.registerTool(
     TOOL_NAME,
     {
       description:
-        "Get the full backlink profile for a domain: page rank, total backlinks, unique referring domains, and a list of top backlinks. Uses DataForSEO as primary source with Common Crawl as fallback.",
+        "Get the full backlink profile for a domain: MozRank, total backlinks, unique referring domains, and a list of top backlinks. Uses Moz as primary source with Common Crawl as fallback.",
       inputSchema,
       outputSchema,
     },
@@ -83,60 +93,71 @@ export function registerBacklinkProfileTool(server: McpServer): void {
         assertValidDomain(args.domain);
         const domain = cleanDomain(args.domain);
         const limit = args.limit ?? DEFAULT_LIMIT;
-        logger.info(`get_backlink_profile called for: ${domain} (limit=${limit})`);
+        logger.info(
+          `get_backlink_profile called for: ${domain} (limit=${limit})`,
+        );
 
-        // Fire PageRank and DataForSEO in parallel
-        const [rankSettled, dfsSettled] = await Promise.allSettled([
-          getDomainPageRank(domain),
-          getDataForSeoProfile(domain, limit),
+        // Fetch Moz url_metrics (for pageRank + counts) and links in parallel
+        const [mozMetricsSettled, mozLinksSettled] = await Promise.allSettled([
+          getMozMetrics(domain),
+          getMozLinks(domain, limit),
         ]);
 
-        if (rankSettled.status === "rejected") {
-          throw rankSettled.reason instanceof Error
-            ? rankSettled.reason
-            : new Error(String(rankSettled.reason));
+        if (mozMetricsSettled.status === "rejected") {
+          throw mozMetricsSettled.reason instanceof Error
+            ? mozMetricsSettled.reason
+            : new Error(String(mozMetricsSettled.reason));
         }
 
-        const rankResult = rankSettled.value;
+        const mozMetrics = mozMetricsSettled.value;
+        const pageRank = mozMetrics.mozRank;
+        const rank = mozRankToTier(pageRank);
+
         let backlinks: BacklinkEntry[];
         let totalBacklinks: number;
         let referringDomainsCount: number;
         let note: string | undefined;
 
-        // ── Primary: DataForSEO ──────────────────────────────────────────────
+        // ── Primary: Moz /v2/links ────────────────────────────────────────────
         if (
-          dfsSettled.status === "fulfilled" &&
-          dfsSettled.value.topBacklinks.length > 0
+          mozLinksSettled.status === "fulfilled" &&
+          mozLinksSettled.value.length > 0
         ) {
-          const dfs = dfsSettled.value;
-          backlinks = dfs.topBacklinks.map((b) => ({
-            url: b.url,
-            timestamp: b.lastSeen,
-            status: "200",
-            source: "dataforseo" as const,
+          const mozLinks = mozLinksSettled.value;
+          backlinks = mozLinks.map((link) => ({
+            // source.page is the URL path without protocol; prepend https://
+            url: link.source.page.startsWith("http")
+              ? link.source.page
+              : `https://${link.source.page}`,
+            timestamp: link.date_last_seen ?? new Date().toISOString(),
+            status: "N/A", // Moz does not provide per-backlink HTTP status codes
+            source: "moz" as const,
           }));
-          totalBacklinks = dfs.totalBacklinks;
-          referringDomainsCount = dfs.referringDomains;
+
+          // Use url_metrics counts for accurate totals (Moz index counts)
+          totalBacklinks = mozMetrics.linksIn ?? backlinks.length;
+          referringDomainsCount =
+            mozMetrics.rootDomainsCount ?? new Set(backlinks.map((b) => {
+              try { return new URL(b.url).hostname; } catch { return b.url; }
+            })).size;
+
           logger.info(
-            `get_backlink_profile: DataForSEO found ${totalBacklinks} total backlinks for ${domain}`,
+            `get_backlink_profile: Moz returned ${mozLinks.length} backlinks for ${domain}`,
           );
         } else {
-          // ── Fallback: Common Crawl ─────────────────────────────────────────
-          if (dfsSettled.status === "fulfilled") {
+          // ── Fallback: Common Crawl ────────────────────────────────────────
+          if (mozLinksSettled.status === "fulfilled") {
             logger.info(
-              `get_backlink_profile: DataForSEO returned 0 results for ${domain}, trying Common Crawl`,
+              `get_backlink_profile: Moz returned 0 links for ${domain}, trying Common Crawl`,
             );
           } else {
-            const reason = dfsSettled.reason;
+            const reason = mozLinksSettled.reason;
             logger.warn(
-              `get_backlink_profile: DataForSEO failed for ${domain} (${reason instanceof Error ? reason.message : String(reason)}), trying Common Crawl`,
+              `get_backlink_profile: Moz links failed for ${domain} (${reason instanceof Error ? reason.message : String(reason)}), trying Common Crawl`,
             );
           }
 
-          // Helper — attempt a crawl fetch, return null on failure
-          const tryCrawl = async (
-            target: string,
-          ): Promise<BacklinkEntry[] | null> => {
+          const tryCrawl = async (target: string): Promise<BacklinkEntry[] | null> => {
             try {
               return await getBacklinksFromCrawl(target, limit);
             } catch {
@@ -160,15 +181,20 @@ export function registerBacklinkProfileTool(server: McpServer): void {
           }
 
           if (!crawlBacklinks) {
-            const error = formatError(
-              "NO_BACKLINK_DATA",
-              "No backlink records found for this domain in available data sources.",
-            );
+            // Both primary and fallback failed — return structured empty response
+            const output = {
+              domain,
+              note: "No backlink data found. Moz returned no results and Common Crawl has no records for this domain.",
+              pageRank,
+              rank,
+              domainAuthority: "not fetched — use get_domain_authority tool",
+              totalBacklinks: 0,
+              referringDomainsCount: 0,
+              topBacklinks: [] as BacklinkEntry[],
+            };
             return {
-              content: [
-                { type: "text" as const, text: JSON.stringify(error) },
-              ],
-              isError: true,
+              structuredContent: output as unknown as Record<string, unknown>,
+              content: [{ type: "text" as const, text: JSON.stringify(output) }],
             } as unknown as CallToolResult;
           }
 
@@ -176,23 +202,17 @@ export function registerBacklinkProfileTool(server: McpServer): void {
           totalBacklinks = crawlBacklinks.length;
           referringDomainsCount = new Set(
             crawlBacklinks.map((b) => {
-              try {
-                return new URL(b.url).hostname;
-              } catch {
-                return b.url;
-              }
+              try { return new URL(b.url).hostname; } catch { return b.url; }
             }),
           ).size;
 
-          if (usedRoot) {
-            note = "No subdomain data found, showing root domain results";
-          } else if (dfsSettled.status === "fulfilled") {
-            note = "DataForSEO returned no results; showing Common Crawl data";
-          }
+          note = usedRoot
+            ? "No subdomain data found; showing root domain results from Common Crawl"
+            : "Moz returned no results; showing Common Crawl fallback data";
         }
 
         const output: BacklinkProfile & { note?: string } = {
-          ...formatBacklinkProfile(domain, rankResult, backlinks, {
+          ...formatBacklinkProfile(domain, pageRank, rank, backlinks, {
             totalBacklinks,
             referringDomainsCount,
           }),

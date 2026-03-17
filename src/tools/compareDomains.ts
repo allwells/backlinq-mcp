@@ -1,11 +1,11 @@
 // Tool: compare_domains
-// Adapters: openPageRank + moz for BOTH domains -- all 4 calls in parallel
+// Adapter: Moz url_metrics with batch query (both domains in a single API call)
+// No OpenPageRank dependency — MozRank replaces it.
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { CompareDomainsOutput, McpError } from "../types/index.js";
-import { getDomainPageRank } from "../adapters/openPageRank.js";
 import { getMozMetrics } from "../adapters/moz.js";
 import { cleanDomain, assertValidDomain } from "../utils/validator.js";
 import { formatDomainComparison, formatError } from "../utils/formatter.js";
@@ -15,7 +15,7 @@ const TOOL_NAME = "compare_domains" as const;
 
 const domainMetricsSchema = z.object({
   domain: z.string(),
-  pageRank: z.number(),
+  pageRank: z.number().describe("MozRank (0-10)."),
   domainAuthority: z.number(),
   spamScore: z.number(),
   linksIn: z.number().optional(),
@@ -46,33 +46,27 @@ export function registerCompareDomainsTool(server: McpServer): void {
     TOOL_NAME,
     {
       description:
-        "Compare two domains side by side: page rank, domain authority, spam score, and total inbound links. Returns a winner and human-readable summary.",
+        "Compare two domains side by side: MozRank, domain authority, spam score, and total inbound links. Returns a winner and human-readable summary. Uses a single batched Moz API call.",
       inputSchema,
       outputSchema,
     },
     async (args) => {
       try {
-        assertValidDomain(args.domainA); // Validate raw input FIRST, before any cleaning
+        assertValidDomain(args.domainA);
         assertValidDomain(args.domainB);
         const domainA = cleanDomain(args.domainA);
         const domainB = cleanDomain(args.domainB);
         logger.info(`compare_domains called: ${domainA} vs ${domainB}`);
 
-        // All 4 adapter calls are independent -- fire them all in parallel
-        const [rankA, mozA, rankB, mozB] = await Promise.all([
-          getDomainPageRank(domainA),
-          getMozMetrics(domainA),
-          getDomainPageRank(domainB),
-          getMozMetrics(domainB),
-        ]);
+        // Both domains in a single Moz url_metrics call (up to 50 targets supported)
+        const results = await getMozMetrics([domainA, domainB]);
+        const [mozA, mozB] = results;
 
-        const comparison = formatDomainComparison(
-          domainA,
-          { rankResult: rankA, mozMetrics: mozA },
-          domainB,
-          { rankResult: rankB, mozMetrics: mozB },
-        );
+        if (!mozA || !mozB) {
+          throw new Error(`[Moz] url_metrics returned fewer results than expected for batch query`);
+        }
 
+        const comparison = formatDomainComparison(domainA, mozA, domainB, mozB);
         const output: CompareDomainsOutput = { comparison };
 
         return {

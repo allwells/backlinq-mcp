@@ -3,7 +3,6 @@ import "dotenv/config";
 import { startServer } from "./server.js";
 
 const REQUIRED_ENV_VARS = [
-  "OPEN_PAGERANK_API_KEY",
   "MOZ_ACCESS_ID",
   "MOZ_SECRET_KEY",
 ] as const;

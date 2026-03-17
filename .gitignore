@@ -15,3 +15,6 @@ dist/
 *.log
 
 .claude/
+CLAUDE.md
+MOZ_API_RESEARCH.md
+TEST_RESULTS.md

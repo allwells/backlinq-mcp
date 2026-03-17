@@ -4,23 +4,23 @@ import type {
   BacklinkEntry,
   BacklinkProfile,
   DomainComparison,
-  DomainRankResult,
   McpError,
   MozDomainMetrics,
 } from "../types/index.js";
 
 // ─── Adapter result combiners ─────────────────────────────────────────────────
 
-/**
- * Combines Open PageRank + Common Crawl results into a BacklinkProfile.
- * Called by the get_backlink_profile tool.
- */
 const DA_NOT_FETCHED_MSG =
   "not fetched — use get_domain_authority tool" as const;
 
+/**
+ * Combines Moz metrics + backlink records into a BacklinkProfile.
+ * Called by the get_backlink_profile tool.
+ */
 export function formatBacklinkProfile(
   domain: string,
-  rankResult: DomainRankResult,
+  pageRank: number,
+  rank: string,
   backlinks: readonly BacklinkEntry[],
   counts?: { totalBacklinks?: number; referringDomainsCount?: number },
 ): BacklinkProfile {
@@ -36,14 +36,8 @@ export function formatBacklinkProfile(
 
   return {
     domain,
-    pageRank:
-      typeof rankResult.pageRank === "object" && rankResult.pageRank !== null
-        ? Number((rankResult.pageRank as any).value || rankResult.pageRank)
-        : Number(rankResult.pageRank),
-    rank:
-      typeof rankResult.rank === "object" && rankResult.rank !== null
-        ? String((rankResult.rank as any).value || rankResult.rank)
-        : String(rankResult.rank),
+    pageRank,
+    rank,
     domainAuthority: DA_NOT_FETCHED_MSG,
     totalBacklinks: counts?.totalBacklinks ?? backlinks.length,
     referringDomainsCount: counts?.referringDomainsCount ?? uniqueDomains.size,
@@ -52,47 +46,39 @@ export function formatBacklinkProfile(
 }
 
 /**
- * Builds a side-by-side DomainComparison from two sets of adapter results.
+ * Builds a side-by-side DomainComparison from two sets of Moz results.
  * Called by the compare_domains tool.
  */
 export function formatDomainComparison(
   domainA: string,
-  metricsA: { rankResult: DomainRankResult; mozMetrics: MozDomainMetrics },
+  metricsA: MozDomainMetrics,
   domainB: string,
-  metricsB: { rankResult: DomainRankResult; mozMetrics: MozDomainMetrics },
+  metricsB: MozDomainMetrics,
 ): DomainComparison {
-  const scoreA =
-    metricsA.rankResult.pageRank + metricsA.mozMetrics.domainAuthority / 10;
-  const scoreB =
-    metricsB.rankResult.pageRank + metricsB.mozMetrics.domainAuthority / 10;
+  const scoreA = metricsA.mozRank + metricsA.domainAuthority / 10;
+  const scoreB = metricsB.mozRank + metricsB.domainAuthority / 10;
 
   const winner = scoreA > scoreB ? domainA : scoreB > scoreA ? domainB : "tie";
 
   const summary =
     winner === "tie"
       ? `${domainA} and ${domainB} are evenly matched.`
-      : `${winner} has a stronger overall backlink profile (PageRank + Domain Authority).`;
+      : `${winner} has a stronger overall backlink profile (MozRank + Domain Authority).`;
 
   return {
     domainA: {
       domain: domainA,
-      pageRank: Number(metricsA.rankResult.pageRank),
-      domainAuthority: Number(metricsA.mozMetrics.domainAuthority),
-      spamScore: Number(metricsA.mozMetrics.spamScore),
-      linksIn:
-        metricsA.mozMetrics.linksIn !== undefined
-          ? Number(metricsA.mozMetrics.linksIn)
-          : undefined,
+      pageRank: Number(metricsA.mozRank),
+      domainAuthority: Number(metricsA.domainAuthority),
+      spamScore: Number(metricsA.spamScore),
+      linksIn: metricsA.linksIn !== undefined ? Number(metricsA.linksIn) : undefined,
     },
     domainB: {
       domain: domainB,
-      pageRank: Number(metricsB.rankResult.pageRank),
-      domainAuthority: Number(metricsB.mozMetrics.domainAuthority),
-      spamScore: Number(metricsB.mozMetrics.spamScore),
-      linksIn:
-        metricsB.mozMetrics.linksIn !== undefined
-          ? Number(metricsB.mozMetrics.linksIn)
-          : undefined,
+      pageRank: Number(metricsB.mozRank),
+      domainAuthority: Number(metricsB.domainAuthority),
+      spamScore: Number(metricsB.spamScore),
+      linksIn: metricsB.linksIn !== undefined ? Number(metricsB.linksIn) : undefined,
     },
     winner,
     summary,

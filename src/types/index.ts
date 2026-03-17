@@ -33,7 +33,7 @@ export interface McpError {
   readonly message: string;
 }
 
-// ─── Open PageRank ────────────────────────────────────────────────────────────
+// ─── Open PageRank (legacy — adapter kept but no longer called) ───────────────
 
 export interface OpenPageRankResponse {
   readonly status_code: number;
@@ -51,7 +51,7 @@ export interface DomainRankResult {
   readonly domain: string;
   readonly pageRank: number;
   readonly rank: string;
-  readonly source: "openpagerank";
+  readonly source: "openpagerank" | "moz";
 }
 
 // ─── Moz API ─────────────────────────────────────────────────────────────────
@@ -60,7 +60,12 @@ export interface MozMetricsResponse {
   readonly results: ReadonlyArray<{
     readonly domain_authority: number;
     readonly spam_score: number;
-    readonly links_in?: number;
+    /** Total pages linking to this root domain (used as linksIn) */
+    readonly pages_to_root_domain?: number;
+    /** Page Authority 0–100 — divided by 10 to produce a 0–10 mozRank proxy */
+    readonly page_authority?: number;
+    /** Number of unique root domains linking to this root domain */
+    readonly root_domains_to_root_domain?: number;
   }>;
 }
 
@@ -68,8 +73,59 @@ export interface MozDomainMetrics {
   readonly domain: string;
   readonly domainAuthority: number;
   readonly spamScore: number;
+  /** Total inbound pages (pages_to_root_domain) */
   readonly linksIn?: number;
+  /** Page Authority / 10 — 0–10 proxy for PageRank */
+  readonly mozRank: number;
+  /** Total referring root domains */
+  readonly rootDomainsCount?: number;
   readonly source: "moz";
+}
+
+// ─── Moz Links API (/v2/links) ────────────────────────────────────────────────
+
+/** Source/target page object nested inside a /v2/links result item */
+export interface MozLinkPage {
+  /** URL path (no protocol), e.g. "example.com/page" */
+  readonly page: string;
+  readonly root_domain?: string;
+  readonly domain_authority?: number;
+  readonly last_crawled?: string;
+}
+
+export interface MozLink {
+  readonly source: MozLinkPage;
+  readonly target?: MozLinkPage;
+  readonly anchor_text?: string;
+  readonly nofollow?: boolean;
+  readonly date_last_seen?: string;
+  readonly date_first_seen?: string;
+}
+
+export interface MozLinksResponse {
+  readonly results: ReadonlyArray<MozLink>;
+  readonly next_token?: string;
+}
+
+// ─── Moz Linking Root Domains API (/v2/linking_root_domains) ─────────────────
+
+export interface MozLinkingRootDomain {
+  /** Root domain linking to the target */
+  readonly root_domain: string;
+  readonly domain_authority?: number;
+  readonly spam_score?: number;
+  /** Nested counts for links pointing at the target */
+  readonly to_target?: {
+    readonly pages?: number;
+    readonly nofollow_pages?: number;
+    readonly redirect_pages?: number;
+    readonly deleted_pages?: number;
+  };
+}
+
+export interface MozLinkingRootDomainsResponse {
+  readonly results: ReadonlyArray<MozLinkingRootDomain>;
+  readonly next_token?: string;
 }
 
 // ─── Common Crawl ─────────────────────────────────────────────────────────────
@@ -85,7 +141,7 @@ export interface BacklinkEntry {
   readonly url: string;
   readonly timestamp: string;
   readonly status: string;
-  readonly source: "commoncrawl" | "dataforseo";
+  readonly source: "commoncrawl" | "dataforseo" | "moz";
 }
 
 // ─── Referring Domains ────────────────────────────────────────────────────────
@@ -94,7 +150,7 @@ export interface ReferringDomain {
   readonly domain: string;
   readonly exampleUrl: string;
   readonly lastSeen: string;
-  readonly source: "commoncrawl" | "dataforseo";
+  readonly source: "commoncrawl" | "dataforseo" | "moz";
   readonly backlinkCount?: number;
   readonly dofollowCount?: number;
 }
@@ -156,7 +212,7 @@ export interface CompareDomainsOutput {
   readonly comparison: DomainComparison;
 }
 
-// ─── DataForSEO API ───────────────────────────────────────────────────────────
+// ─── DataForSEO API (legacy — adapter kept but no longer called) ──────────────
 
 /** DataForSEO Backlinks API request body */
 export interface DataForSeoBacklinksRequest {

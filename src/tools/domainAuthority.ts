@@ -1,11 +1,10 @@
 // Tool: get_domain_authority
-// Adapters: openPageRank + moz (parallel)
+// Adapter: Moz url_metrics (single call — no OpenPageRank dependency)
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { DomainAuthorityOutput, McpError } from "../types/index.js";
-import { getDomainPageRank } from "../adapters/openPageRank.js";
 import { getMozMetrics } from "../adapters/moz.js";
 import { cleanDomain, assertValidDomain } from "../utils/validator.js";
 import { formatError } from "../utils/formatter.js";
@@ -26,12 +25,12 @@ const outputSchema = {
   pageRank: z
     .number()
     .describe(
-      "Open PageRank score (0-10), a logarithmic measure of link authority.",
+      "MozRank score (0-10), a logarithmic measure of link authority equivalent to PageRank.",
     ),
   rank: z
     .string()
     .describe(
-      "Global rank position string from Open PageRank (lower is better).",
+      "Rank tier derived from MozRank (e.g. 'Top Tier', 'High', 'Mid', 'Low').",
     ),
   domainAuthority: z
     .number()
@@ -49,36 +48,40 @@ const outputSchema = {
     .describe("Total inbound links to the domain as reported by Moz."),
 };
 
+/** Converts a MozRank 0-10 score to a descriptive rank tier string. */
+function mozRankToTier(mozRank: number): string {
+  if (mozRank >= 8) return "Top Tier";
+  if (mozRank >= 6) return "High";
+  if (mozRank >= 4) return "Mid";
+  if (mozRank >= 2) return "Low";
+  return "Minimal";
+}
+
 export function registerDomainAuthorityTool(server: McpServer): void {
   server.registerTool(
     TOOL_NAME,
     {
       description:
-        "Get domain authority score, page rank, spam score, and inbound link count for a domain. Uses Open PageRank and Moz data sources.",
+        "Get domain authority score, MozRank, spam score, and inbound link count for a domain. Uses Moz as the sole data source.",
       inputSchema,
       outputSchema,
     },
     async (args) => {
       try {
-        assertValidDomain(args.domain); // Validate raw input FIRST, before any cleaning
+        assertValidDomain(args.domain);
         const domain = cleanDomain(args.domain);
         logger.info(`get_domain_authority called for: ${domain}`);
 
-        const [rankResult, mozResult] = await Promise.all([
-          getDomainPageRank(domain),
-          getMozMetrics(domain),
-        ]);
+        const mozResult = await getMozMetrics(domain);
 
         const output: DomainAuthorityOutput = {
           domain,
-          pageRank: Number(rankResult.pageRank),
-          rank: String(rankResult.rank),
+          pageRank: Number(mozResult.mozRank),
+          rank: mozRankToTier(mozResult.mozRank),
           domainAuthority: Number(mozResult.domainAuthority),
           spamScore: Number(mozResult.spamScore),
           linksIn:
-            mozResult.linksIn !== undefined
-              ? Number(mozResult.linksIn)
-              : undefined,
+            mozResult.linksIn !== undefined ? Number(mozResult.linksIn) : undefined,
         };
 
         return {
