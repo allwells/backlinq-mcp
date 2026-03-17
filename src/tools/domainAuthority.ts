@@ -9,6 +9,12 @@ import { getMozMetrics } from "../adapters/moz.js";
 import { cleanDomain, assertValidDomain } from "../utils/validator.js";
 import { formatError } from "../utils/formatter.js";
 import { logger } from "../utils/logger.js";
+import {
+  getCachedDomainAuthority,
+  getStaleCachedDomainAuthority,
+  setCachedDomainAuthority,
+  logQuery,
+} from "../database.js";
 
 const TOOL_NAME = "get_domain_authority" as const;
 
@@ -72,7 +78,51 @@ export function registerDomainAuthorityTool(server: McpServer): void {
         const domain = cleanDomain(args.domain);
         logger.info(`get_domain_authority called for: ${domain}`);
 
-        const mozResult = await getMozMetrics(domain);
+        // ── Cache lookup ──────────────────────────────────────────────────────
+        const cached = getCachedDomainAuthority(domain);
+        logQuery(domain, "get_domain_authority", !!cached);
+        if (cached) {
+          logger.info(`get_domain_authority: cache hit for ${domain}`);
+          const output: DomainAuthorityOutput = {
+            domain,
+            pageRank: Number(cached.mozRank),
+            rank: mozRankToTier(cached.mozRank),
+            domainAuthority: Number(cached.domainAuthority),
+            spamScore: Number(cached.spamScore),
+            linksIn: cached.linksIn !== undefined ? Number(cached.linksIn) : undefined,
+          };
+          return {
+            structuredContent: output as unknown as Record<string, unknown>,
+            content: [{ type: "text" as const, text: JSON.stringify(output) }],
+          } as unknown as CallToolResult;
+        }
+
+        // ── Moz API fetch ─────────────────────────────────────────────────────
+        let mozResult;
+        try {
+          mozResult = await getMozMetrics(domain);
+          setCachedDomainAuthority(domain, mozResult);
+        } catch (fetchErr: unknown) {
+          // Moz unavailable — serve stale cache data with a warning note if available
+          const stale = getStaleCachedDomainAuthority(domain);
+          if (stale) {
+            logger.warn(`get_domain_authority: Moz failed, serving stale cache for ${domain}`);
+            const output = {
+              domain,
+              pageRank: Number(stale.mozRank),
+              rank: mozRankToTier(stale.mozRank),
+              domainAuthority: Number(stale.domainAuthority),
+              spamScore: Number(stale.spamScore),
+              linksIn: stale.linksIn !== undefined ? Number(stale.linksIn) : undefined,
+              note: "Data served from stale cache — Moz API temporarily unavailable.",
+            };
+            return {
+              structuredContent: output as unknown as Record<string, unknown>,
+              content: [{ type: "text" as const, text: JSON.stringify(output) }],
+            } as unknown as CallToolResult;
+          }
+          throw fetchErr;
+        }
 
         const output: DomainAuthorityOutput = {
           domain,

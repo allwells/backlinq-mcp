@@ -12,7 +12,7 @@ COPY src/ ./src/
 RUN bun run build
 
 
-FROM node:20-alpine AS runner
+FROM oven/bun:alpine AS runner
 
 WORKDIR /app
 
@@ -24,4 +24,4 @@ COPY --from=builder /app/node_modules ./node_modules
 
 EXPOSE 8000
 
-CMD ["node", "dist/index.js"]
+CMD ["bun", "dist/index.js"]

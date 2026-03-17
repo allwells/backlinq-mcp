@@ -15,6 +15,13 @@ import {
 } from "../utils/validator.js";
 import { formatBacklinkProfile, formatError } from "../utils/formatter.js";
 import { logger } from "../utils/logger.js";
+import {
+  getCachedDomainAuthority,
+  setCachedDomainAuthority,
+  getCachedBacklinks,
+  setCachedBacklinks,
+  logQuery,
+} from "../database.js";
 
 const TOOL_NAME = "get_backlink_profile" as const;
 const DEFAULT_LIMIT = 20;
@@ -97,6 +104,33 @@ export function registerBacklinkProfileTool(server: McpServer): void {
           `get_backlink_profile called for: ${domain} (limit=${limit})`,
         );
 
+        // ── Cache lookup ──────────────────────────────────────────────────────
+        const cachedMetrics = getCachedDomainAuthority(domain);
+        const cachedBacklinks = getCachedBacklinks(domain);
+        const cacheHit = !!(cachedMetrics && cachedBacklinks);
+        logQuery(domain, "get_backlink_profile", cacheHit);
+
+        if (cacheHit) {
+          logger.info(`get_backlink_profile: cache hit for ${domain}`);
+          const pageRank = cachedMetrics.mozRank;
+          const rank = mozRankToTier(pageRank);
+          const output: BacklinkProfile & { note?: string } = {
+            ...formatBacklinkProfile(domain, pageRank, rank, cachedBacklinks, {
+              totalBacklinks: cachedMetrics.linksIn ?? cachedBacklinks.length,
+              referringDomainsCount: cachedMetrics.rootDomainsCount ?? new Set(
+                cachedBacklinks.map((b) => {
+                  try { return new URL(b.url).hostname; } catch { return b.url; }
+                }),
+              ).size,
+            }),
+          };
+          return {
+            structuredContent: output as unknown as Record<string, unknown>,
+            content: [{ type: "text" as const, text: JSON.stringify(output) }],
+          } as unknown as CallToolResult;
+        }
+
+        // ── Moz API fetch ─────────────────────────────────────────────────────
         // Fetch Moz url_metrics (for pageRank + counts) and links in parallel
         const [mozMetricsSettled, mozLinksSettled] = await Promise.allSettled([
           getMozMetrics(domain),
@@ -110,6 +144,7 @@ export function registerBacklinkProfileTool(server: McpServer): void {
         }
 
         const mozMetrics = mozMetricsSettled.value;
+        setCachedDomainAuthority(domain, mozMetrics);
         const pageRank = mozMetrics.mozRank;
         const rank = mozRankToTier(pageRank);
 
@@ -141,6 +176,7 @@ export function registerBacklinkProfileTool(server: McpServer): void {
               try { return new URL(b.url).hostname; } catch { return b.url; }
             })).size;
 
+          setCachedBacklinks(domain, backlinks);
           logger.info(
             `get_backlink_profile: Moz returned ${mozLinks.length} backlinks for ${domain}`,
           );

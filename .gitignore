@@ -18,3 +18,7 @@ dist/
 CLAUDE.md
 MOZ_API_RESEARCH.md
 TEST_RESULTS.md
+
+
+# SQLite database files
+*.db

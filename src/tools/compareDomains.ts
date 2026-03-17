@@ -10,6 +10,11 @@ import { getMozMetrics } from "../adapters/moz.js";
 import { cleanDomain, assertValidDomain } from "../utils/validator.js";
 import { formatDomainComparison, formatError } from "../utils/formatter.js";
 import { logger } from "../utils/logger.js";
+import {
+  getCachedDomainAuthority,
+  setCachedDomainAuthority,
+  logQuery,
+} from "../database.js";
 
 const TOOL_NAME = "compare_domains" as const;
 
@@ -58,12 +63,35 @@ export function registerCompareDomainsTool(server: McpServer): void {
         const domainB = cleanDomain(args.domainB);
         logger.info(`compare_domains called: ${domainA} vs ${domainB}`);
 
-        // Both domains in a single Moz url_metrics call (up to 50 targets supported)
-        const results = await getMozMetrics([domainA, domainB]);
-        const [mozA, mozB] = results;
+        // ── Cache lookup ──────────────────────────────────────────────────────
+        let mozA = getCachedDomainAuthority(domainA);
+        let mozB = getCachedDomainAuthority(domainB);
+        logQuery(domainA, "compare_domains", !!mozA);
+        logQuery(domainB, "compare_domains", !!mozB);
 
         if (!mozA || !mozB) {
-          throw new Error(`[Moz] url_metrics returned fewer results than expected for batch query`);
+          const needA = !mozA;
+          const needB = !mozB;
+
+          // Batch if both are missing, single calls otherwise
+          if (needA && needB) {
+            const results = await getMozMetrics([domainA, domainB]);
+            mozA = results[0]!;
+            mozB = results[1]!;
+          } else if (needA) {
+            mozA = await getMozMetrics(domainA);
+          } else {
+            mozB = await getMozMetrics(domainB);
+          }
+
+          if (!mozA || !mozB) {
+            throw new Error(
+              `[Moz] url_metrics returned fewer results than expected for batch query`,
+            );
+          }
+
+          if (needA) setCachedDomainAuthority(domainA, mozA);
+          if (needB) setCachedDomainAuthority(domainB, mozB);
         }
 
         const comparison = formatDomainComparison(domainA, mozA, domainB, mozB);

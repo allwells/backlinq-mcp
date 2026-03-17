@@ -1,6 +1,7 @@
 // Entry point — validates environment and starts the MCP server
 import "dotenv/config";
 import { startServer } from "./server.js";
+import { initDatabase } from "./database.js";
 
 const REQUIRED_ENV_VARS = [
   "MOZ_ACCESS_ID",
@@ -19,6 +20,7 @@ function validateEnv(): void {
 
 async function main(): Promise<void> {
   validateEnv();
+  initDatabase();
   await startServer();
 }
 

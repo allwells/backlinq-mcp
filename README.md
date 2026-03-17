@@ -13,7 +13,7 @@ Listed on the [CTX Protocol marketplace](https://ctxprotocol.com). MCP endpoint:
 | `get_domain_authority` | `domain: string` | PageRank, Domain Authority, spam score |
 | `get_backlink_profile` | `domain: string, limit?: number` | Top backlinks, PageRank, referring domain count |
 | `get_referring_domains` | `domain: string, limit?: number` | Deduplicated referring domain list |
-| `compare_domains` | `domains: string[]` | Side-by-side authority metrics (2–5 domains) |
+| `compare_domains` | `domainA: string, domainB: string` | Side-by-side authority metrics |
 
 ---
 
@@ -21,8 +21,8 @@ Listed on the [CTX Protocol marketplace](https://ctxprotocol.com). MCP endpoint:
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) >= 1.0
-- API keys for data sources (Open PageRank, Moz)
+- [Bun](https://bun.sh) >= 1.0 (dev) / Node.js >= 20 (production)
+- Moz API credentials — [moz.com/products/api](https://moz.com/products/api)
 
 ### 1. Clone and install
 
@@ -41,22 +41,15 @@ cp .env.example .env
 Open `.env` and fill in your keys:
 
 ```env
-# CTX Protocol — https://ctxprotocol.com account dashboard
-CTX_API_KEY=your_ctx_api_key_here
-
-# Open PageRank — https://www.domcop.com/openpagerank/
-OPEN_PAGERANK_API_KEY=your_key_here
-
 # Moz API — https://moz.com/products/api
 MOZ_ACCESS_ID=your_access_id_here
 MOZ_SECRET_KEY=your_secret_key_here
 
-# DataForSEO (optional — enables richer backlink data)
-DATAFORSEO_LOGIN=your_login_here
-DATAFORSEO_PASSWORD=your_password_here
-
 # Server port (default: 8000)
 PORT=8000
+
+# SQLite database path (default: ./backlinq.db)
+DB_PATH=./backlinq.db
 ```
 
 ### 3. Run locally
@@ -67,6 +60,8 @@ bun run dev
 
 Server starts at `http://localhost:8000`. The MCP endpoint is `POST /mcp`.
 
+> **Note:** The SQLite cache (`better-sqlite3`) requires Node.js. When running with `bun run dev`, the server starts without caching and logs a warning. Cache is fully active in the production build (`bun run build && bun start`).
+
 ### 4. Build for production
 
 ```bash
@@ -74,13 +69,7 @@ bun run build
 bun start
 ```
 
-### 5. Run tests
-
-```bash
-bun test
-```
-
-### 6. Type check
+### 5. Type check
 
 ```bash
 bun run typecheck
@@ -88,17 +77,35 @@ bun run typecheck
 
 ---
 
+## Caching
+
+All Moz API responses are persisted to a local SQLite database to avoid redundant API calls.
+
+| Table | Data | TTL |
+|-------|------|-----|
+| `domain_authority_cache` | DA, spam score, MozRank, link counts | 24 hours |
+| `backlink_cache` | Individual backlink entries | 7 days |
+| `referring_domain_cache` | Referring domain list | 7 days |
+| `query_log` | Per-query audit log (domain, tool, cache hit) | — |
+
+Cache hits are logged at `INFO` level. If Moz is unavailable and stale data exists for a domain, `get_domain_authority` returns the stale data with a `note` field in the response.
+
+The database file path is configurable via `DB_PATH` (default: `./backlinq.db`). A DB failure at startup degrades gracefully — the server runs without caching rather than refusing to start.
+
+---
+
 ## Architecture
 
 ```
 src/
-├── index.ts              # Entry point — validates env vars, calls startServer()
+├── index.ts              # Entry point — validates env, inits DB, starts server
 ├── server.ts             # McpServer setup + Express HTTP transport
+├── database.ts           # SQLite cache layer (better-sqlite3)
 ├── adapters/             # One file per external data source
-│   ├── openPageRank.ts
-│   ├── moz.ts
-│   ├── commonCrawl.ts
-│   └── dataForSeo.ts
+│   ├── moz.ts            # Primary — url_metrics, /v2/links, /v2/linking_root_domains
+│   ├── commonCrawl.ts    # Fallback for backlinks + referring domains
+│   ├── openPageRank.ts   # Legacy — kept but not called
+│   └── dataForSeo.ts     # Legacy — kept but not called
 ├── tools/                # One file per MCP tool
 │   ├── domainAuthority.ts
 │   ├── backlinkProfile.ts
@@ -109,6 +116,7 @@ src/
 └── utils/
     ├── validator.ts       # cleanDomain(), assertValidDomain()
     ├── formatter.ts       # Response formatting helpers
+    ├── cache.ts           # In-memory TTL cache (Common Crawl fallback)
     └── logger.ts          # Structured logger (stderr only)
 ```
 
@@ -118,7 +126,7 @@ src/
 
 ```
 GET /health
-→ { "status": "OK", "service": "Backlinq MCP", "version": "1.0.0" }
+→ { "status": "OK", "service": "Backlinq MCP", "version": "1.1.0" }
 ```
 
 ---
@@ -127,7 +135,5 @@ GET /health
 
 | Source | Data | Cost |
 |--------|------|------|
-| Open PageRank | PageRank score (0–10) | Free |
-| Moz API | Domain Authority, Spam Score | Paid |
-| DataForSEO | Backlinks, referring domains (primary) | Paid |
+| Moz API | Domain Authority, Spam Score, backlinks, referring domains | Paid |
 | Common Crawl | Backlinks, referring domains (fallback) | Free |

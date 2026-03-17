@@ -18,6 +18,11 @@ import {
 } from "../utils/validator.js";
 import { formatError } from "../utils/formatter.js";
 import { logger } from "../utils/logger.js";
+import {
+  getCachedReferringDomains,
+  setCachedReferringDomains,
+  logQuery,
+} from "../database.js";
 
 const TOOL_NAME = "get_referring_domains" as const;
 const CRAWL_FETCH_LIMIT = 200; // raw records to fetch before dedup
@@ -123,6 +128,22 @@ export function registerReferringDomainsTool(server: McpServer): void {
         const limit = args.limit ?? MAX_LIMIT;
         logger.info(`get_referring_domains called for: ${domain} (limit=${limit})`);
 
+        // ── Cache lookup ──────────────────────────────────────────────────────
+        const cachedDomains = getCachedReferringDomains(domain);
+        logQuery(domain, "get_referring_domains", !!cachedDomains);
+        if (cachedDomains) {
+          logger.info(`get_referring_domains: cache hit for ${domain}`);
+          const output: ReferringDomainsOutput = {
+            domain,
+            totalFound: cachedDomains.length,
+            referringDomains: cachedDomains,
+          };
+          return {
+            structuredContent: output as unknown as Record<string, unknown>,
+            content: [{ type: "text" as const, text: JSON.stringify(output) }],
+          } as unknown as CallToolResult;
+        }
+
         let referringDomains: readonly ReferringDomain[];
         let note: string | undefined;
 
@@ -154,6 +175,7 @@ export function registerReferringDomainsTool(server: McpServer): void {
               dofollowCount,
             };
           });
+          setCachedReferringDomains(domain, referringDomains);
           logger.info(
             `get_referring_domains: Moz returned ${referringDomains.length} referring domains for ${domain}`,
           );

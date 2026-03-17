@@ -1,6 +1,6 @@
 {
   "name": "backlinq-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP Backlink Intelligence Tool, an AI-agent-ready backlink data",
   "type": "module",
   "main": "dist/index.js",
