@@ -33,27 +33,6 @@ export interface McpError {
   readonly message: string;
 }
 
-// ─── Open PageRank (legacy — adapter kept but no longer called) ───────────────
-
-export interface OpenPageRankResponse {
-  readonly status_code: number;
-  readonly response: ReadonlyArray<{
-    readonly domain: string;
-    readonly page_rank_integer: number;
-    readonly page_rank_decimal: number;
-    readonly rank: string;
-    readonly status: string;
-  }>;
-  readonly error?: string;
-}
-
-export interface DomainRankResult {
-  readonly domain: string;
-  readonly pageRank: number;
-  readonly rank: string;
-  readonly source: "openpagerank" | "moz";
-}
-
 // ─── Moz API ─────────────────────────────────────────────────────────────────
 
 export interface MozMetricsResponse {

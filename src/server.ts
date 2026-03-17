@@ -49,7 +49,7 @@ export async function startServer(): Promise<void> {
     }
   });
 
-  // Health check endpoint — used by Railway/Render to confirm the service is up
+  // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
     res.json({ status: "OK", service: "Backlinq MCP", version: "1.1.0" });
   });

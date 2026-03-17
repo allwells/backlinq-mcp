@@ -11,6 +11,7 @@ import type {
   MozLinkingRootDomain,
 } from "../types/index.js";
 import { logger } from "../utils/logger.js";
+import { withMozLimit } from "../utils/limiter.js";
 
 const BASE_URL = "https://lsapi.seomoz.com/v2";
 const TIMEOUT_MS = 25_000;
@@ -66,14 +67,16 @@ export async function getMozMetrics(
       adapter: ADAPTER,
     });
 
-    const response = await fetch(`${BASE_URL}/url_metrics`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: authHeaders(),
-      body: JSON.stringify({
-        targets: domains.map(mozTarget),
+    const response = await withMozLimit(() =>
+      fetch(`${BASE_URL}/url_metrics`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: authHeaders(),
+        body: JSON.stringify({
+          targets: domains.map(mozTarget),
+        }),
       }),
-    });
+    );
 
     if (!response.ok) {
       throw new Error(
@@ -137,16 +140,18 @@ export async function getMozLinks(
       adapter: ADAPTER,
     });
 
-    const response = await fetch(`${BASE_URL}/links`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: authHeaders(),
-      body: JSON.stringify({
-        target: mozTarget(domain),
-        scope: "root_domain",
-        limit,
+    const response = await withMozLimit(() =>
+      fetch(`${BASE_URL}/links`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: authHeaders(),
+        body: JSON.stringify({
+          target: mozTarget(domain),
+          scope: "root_domain",
+          limit,
+        }),
       }),
-    });
+    );
 
     if (!response.ok) {
       throw new Error(
@@ -192,16 +197,18 @@ export async function getMozLinkingRootDomains(
       { adapter: ADAPTER },
     );
 
-    const response = await fetch(`${BASE_URL}/linking_root_domains`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: authHeaders(),
-      body: JSON.stringify({
-        target: mozTarget(domain),
-        scope: "root_domain",
-        limit,
+    const response = await withMozLimit(() =>
+      fetch(`${BASE_URL}/linking_root_domains`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: authHeaders(),
+        body: JSON.stringify({
+          target: mozTarget(domain),
+          scope: "root_domain",
+          limit,
+        }),
       }),
-    });
+    );
 
     if (!response.ok) {
       throw new Error(

@@ -1,24 +1,17 @@
-// Integration test: full HTTP server + real tool calls via POST /mcp
-// Boots the Express server on a random port and makes StreamableHTTP requests
+// Integration test: full HTTP server via POST /mcp
+// Boots the Express server on a random port and exercises the MCP endpoint.
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 
-process.env.OPEN_PAGERANK_API_KEY =
-  process.env.OPEN_PAGERANK_API_KEY ?? "test-placeholder";
 process.env.MOZ_ACCESS_ID = process.env.MOZ_ACCESS_ID ?? "test-placeholder";
 process.env.MOZ_SECRET_KEY = process.env.MOZ_SECRET_KEY ?? "test-placeholder";
-process.env.CTX_API_KEY = process.env.CTX_API_KEY ?? "test-placeholder";
-
-// Override PORT so we don't conflict with anything running on 3000
 process.env.PORT = "0"; // OS assigns a free port
 
 let server: http.Server | undefined;
 let baseUrl: string;
 
-async function postMcp(
-  body: unknown,
-): Promise<{ status: number; body: unknown }> {
+async function postMcp(body: unknown): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const url = new URL("/mcp", baseUrl);
@@ -30,6 +23,7 @@ async function postMcp(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
           "Content-Length": Buffer.byteLength(payload),
         },
       },
@@ -37,6 +31,14 @@ async function postMcp(
         let raw = "";
         res.on("data", (chunk: string) => (raw += chunk));
         res.on("end", () => {
+          // StreamableHTTP returns SSE (data: {...}\n\n) or plain JSON
+          const dataLine = raw.split("\n").find((l) => l.startsWith("data:"));
+          if (dataLine) {
+            try {
+              resolve({ status: res.statusCode ?? 0, body: JSON.parse(dataLine.slice(5).trim()) });
+              return;
+            } catch { /* fall through to plain JSON */ }
+          }
           try {
             resolve({ status: res.statusCode ?? 0, body: JSON.parse(raw) });
           } catch {
@@ -53,16 +55,15 @@ async function postMcp(
 
 describe("HTTP server integration", () => {
   beforeAll(async () => {
-    // Dynamically import so env vars are already set above
     const { default: express } = await import("express");
-    const { createContextMiddleware } = await import("@ctxprotocol/sdk");
-    const { StreamableHTTPServerTransport } =
-      await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+    const { StreamableHTTPServerTransport } = await import(
+      "@modelcontextprotocol/sdk/server/streamableHttp.js"
+    );
     const { createServer } = await import("../../src/server.js");
 
     const app = express();
     app.use(express.json());
-    app.use("/mcp", createContextMiddleware());
+
     app.post("/mcp", async (req, res) => {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -74,14 +75,13 @@ describe("HTTP server integration", () => {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         if (!res.headersSent) {
-          res
-            .status(500)
-            .json({ error: true, code: "INTERNAL_ERROR", message });
+          res.status(500).json({ error: true, code: "INTERNAL_ERROR", message });
         }
       }
     });
+
     app.get("/health", (_req, res) => {
-      res.json({ status: "ok" });
+      res.json({ status: "OK", service: "Backlinq MCP", version: "1.1.0" });
     });
 
     await new Promise<void>((resolve) => {
@@ -100,7 +100,7 @@ describe("HTTP server integration", () => {
     });
   });
 
-  it("GET /health returns { status: ok }", async () => {
+  it("GET /health returns 200 with status OK", async () => {
     const res = await new Promise<{ status: number; body: unknown }>(
       (resolve, reject) => {
         const req = http.get(`${baseUrl}/health`, (r) => {
@@ -114,28 +114,25 @@ describe("HTTP server integration", () => {
       },
     );
     expect(res.status).toBe(200);
-    expect((res.body as { status: string }).status).toBe("ok");
+    expect((res.body as { status: string }).status).toBe("OK");
   });
 
-  it("POST /mcp with tools/list returns available tools", async () => {
+  it("POST /mcp tools/list returns the 4 registered tools", async () => {
     const res = await postMcp({
       jsonrpc: "2.0",
       id: 1,
       method: "tools/list",
       params: {},
     });
-    // CTX middleware may return 401 on tools/list for unverified clients.
-    // We accept either 200 with tools or 401 — both mean the server is functioning.
-    expect([200, 202, 401, 406]).toContain(res.status);
-    if (res.status === 200) {
-      expect(res.body).toHaveProperty("result");
-      const tools = (res.body as { result: { tools: unknown[] } }).result.tools;
-      expect(Array.isArray(tools)).toBe(true);
-      const toolNames = tools.map((t) => (t as { name: string }).name);
-      expect(toolNames).toContain("get_backlink_profile");
-      expect(toolNames).toContain("get_domain_authority");
-      expect(toolNames).toContain("get_referring_domains");
-      expect(toolNames).toContain("compare_domains");
-    }
+    // Accept 200 or 202; anything else means the server is broken
+    expect([200, 202]).toContain(res.status);
+    const tools = (res.body as { result: { tools: Array<{ name: string }> } })
+      .result.tools;
+    expect(Array.isArray(tools)).toBe(true);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("get_domain_authority");
+    expect(names).toContain("get_backlink_profile");
+    expect(names).toContain("get_referring_domains");
+    expect(names).toContain("compare_domains");
   });
 });
