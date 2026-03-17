@@ -97,7 +97,7 @@ const outputSchema = {
           .string()
           .describe("Last crawl or index date (ISO). Moz results use today's date as proxy."),
         source: z
-          .enum(["commoncrawl", "dataforseo", "moz"])
+          .enum(["commoncrawl", "moz"])
           .describe("Data source that provided this entry."),
         backlinkCount: z
           .number()

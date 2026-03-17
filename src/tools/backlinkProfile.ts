@@ -49,7 +49,7 @@ const backlinkEntrySchema = z.object({
       "HTTP status code from source, 'N/A' when the data source does not provide it.",
     ),
   source: z
-    .enum(["commoncrawl", "dataforseo", "moz"])
+    .enum(["commoncrawl", "moz"])
     .describe("Data source that provided this backlink."),
 });
 

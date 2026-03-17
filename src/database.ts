@@ -166,7 +166,7 @@ export function getCachedBacklinks(domain: string): readonly BacklinkEntry[] | n
       url: row.source_url as string,
       timestamp: row.timestamp as string,
       status: row.status as string,
-      source: row.source as "commoncrawl" | "dataforseo" | "moz",
+      source: row.source as "commoncrawl" | "moz",
     }));
   } catch {
     return null;
@@ -208,7 +208,7 @@ export function getCachedReferringDomains(domain: string): readonly ReferringDom
       domain: row.referring_domain as string,
       exampleUrl: row.example_url as string,
       lastSeen: row.last_seen as string,
-      source: row.source as "commoncrawl" | "dataforseo" | "moz",
+      source: row.source as "commoncrawl" | "moz",
       backlinkCount: row.backlink_count != null ? (row.backlink_count as number) : undefined,
       dofollowCount: row.dofollow_count != null ? (row.dofollow_count as number) : undefined,
     }));
