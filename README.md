@@ -8,12 +8,20 @@ Listed on the [CTX Protocol marketplace](https://ctxprotocol.com). MCP endpoint:
 
 ## MCP Tools
 
-| Tool                    | Input                              | Output                                          |
-| ----------------------- | ---------------------------------- | ----------------------------------------------- |
-| `get_domain_authority`  | `domain: string`                   | PageRank, Domain Authority, spam score          |
-| `get_backlink_profile`  | `domain: string, limit?: number`   | Top backlinks, PageRank, referring domain count |
-| `get_referring_domains` | `domain: string, limit?: number`   | Deduplicated referring domain list              |
-| `compare_domains`       | `domainA: string, domainB: string` | Side-by-side authority metrics                  |
+| Tool                    | Input                              | Output                                                         |
+| ----------------------- | ---------------------------------- | -------------------------------------------------------------- |
+| `get_domain_authority`  | `domain: string`                   | PageRank, Domain Authority, spam score                         |
+| `get_backlink_profile`  | `domain: string, limit?: number`   | Top backlinks, PageRank, referring domain count + intelligence |
+| `get_referring_domains` | `domain: string, limit?: number`   | Deduplicated referring domain list + intelligence              |
+| `compare_domains`       | `domainA: string, domainB: string` | Side-by-side authority metrics + verdict                       |
+
+### Response enrichment
+
+Moz data is used to derive intelligence signals at no extra API cost:
+
+- **`get_backlink_profile`** → `backlink_intelligence`: dofollow ratio, spam risk tier, top 5 anchor texts, authority distribution by DA bucket
+- **`get_referring_domains`** → `referring_domain_intelligence`: average referring DA, high-authority domain count (DA > 60), dofollow domain ratio
+- **`compare_domains`** → `verdict`: stronger authority, cleaner spam profile, plain-language summary
 
 ---
 
@@ -85,14 +93,16 @@ bun run typecheck
 
 All Moz API responses are persisted to a local SQLite database (`bun:sqlite`) to avoid redundant API calls.
 
-| Table                    | Data                                          | TTL      |
-| ------------------------ | --------------------------------------------- | -------- |
-| `domain_authority_cache` | DA, spam score, MozRank, link counts          | 24 hours |
-| `backlink_cache`         | Individual backlink entries                   | 7 days   |
-| `referring_domain_cache` | Referring domain list                         | 7 days   |
-| `query_log`              | Per-query audit log (domain, tool, cache hit) | —        |
+| Table                    | Data                                                         | TTL      |
+| ------------------------ | ------------------------------------------------------------ | -------- |
+| `domain_authority_cache` | DA, spam score, MozRank, link counts                         | 24 hours |
+| `backlink_cache`         | Backlink entries with anchor text, source DA, link type      | 7 days   |
+| `referring_domain_cache` | Referring domains with DA per domain                         | 7 days   |
+| `query_log`              | Per-query audit log (domain, tool, cache hit)                | —        |
+| `warm_cache_status`      | One-shot completion flag for the seed warm job               | —        |
+| `moz_api_calls`          | Every Moz API call — endpoint, domain, status, response time | —        |
 
-Cache hits are logged at `INFO` level. If Moz is unavailable and stale data exists for a domain, `get_domain_authority` returns the stale data with a `note` field in the response.
+Cache hits are logged at `INFO` level. All tools serve stale cached data (with a `note` field) when the Moz hourly budget is approaching its limit or when Moz is unreachable.
 
 The database file path is configurable via `DB_PATH` (default: `./backlinq.db`). A DB failure at startup degrades gracefully — the server runs without caching rather than refusing to start.
 
@@ -102,15 +112,39 @@ To inspect cache hit rates from the command line:
 bun run cache:stats
 ```
 
+## Rate Limit Budget
+
+The server tracks every Moz API call in the `moz_api_calls` table and automatically backs off when approaching configured limits.
+
+```env
+MOZ_HOURLY_LIMIT=200   # default
+MOZ_DAILY_LIMIT=2000   # default
+```
+
+At 80% of the hourly limit, tools switch to serving stale cache data rather than making new API calls. If no stale data exists for a domain, the live call proceeds regardless. Adjust the limits in `.env` to match your Moz plan.
+
+## Background Jobs
+
+Two jobs run in the server process to keep the cache warm:
+
+- **Cache warmer** — runs once on first deployment, seeds DA data for ~1 000 well-known domains so fresh installs have populated caches immediately.
+- **Preload job** — runs every 24 hours (first run 1 hour after startup), finds the top-500 cache-miss domains whose DA data expires within 6 hours, and refreshes them proactively.
+
 ---
 
 ## Architecture
 
 ```
 src/
-├── index.ts              # Entry point — validates env, inits DB, starts server
+├── index.ts              # Entry point — validates env, inits DB, warms cache, starts server
 ├── server.ts             # McpServer setup + Express HTTP transport
 ├── database.ts           # SQLite cache layer (bun:sqlite)
+├── rateLimit.ts          # Moz budget tracker — recordApiCall(), isApproachingLimit()
+├── data/
+│   └── seed-domains.ts   # ~1 000 well-known domains for cache warm job
+├── jobs/
+│   ├── warm-cache.ts     # One-shot seed job (runs once per deployment)
+│   └── preload.ts        # 24 h refresh job (top-missed expiring domains)
 ├── cli/
 │   └── stats.ts          # Cache statistics CLI (bun run cache:stats)
 ├── adapters/
@@ -132,13 +166,15 @@ src/
     └── logger.ts          # Structured logger (stderr only)
 ```
 
+For a detailed walkthrough of every layer — request lifecycle, adapter internals, caching strategy, rate limit design, background jobs, and enrichment computation — see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ---
 
 ## Health Check
 
 ```
 GET /health
-→ { "status": "OK", "service": "Backlinq MCP", "version": "1.1.0" }
+→ { "status": "OK", "service": "Backlinq MCP", "version": "1.2.0" }
 ```
 
 ---

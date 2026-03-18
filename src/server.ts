@@ -13,7 +13,7 @@ const PORT = Number(process.env.PORT) || 8000;
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "Backlinq",
-    version: "1.1.0",
+    version: "1.2.0",
   });
 
   registerDomainAuthorityTool(server);
@@ -51,7 +51,7 @@ export async function startServer(): Promise<void> {
 
   // Health check endpoint
   app.get("/health", (_req: Request, res: Response) => {
-    res.json({ status: "OK", service: "Backlinq MCP", version: "1.1.0" });
+    res.json({ status: "OK", service: "Backlinq MCP", version: "1.2.0" });
   });
 
   app.listen(PORT, () => {
