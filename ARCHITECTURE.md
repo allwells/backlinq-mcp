@@ -68,9 +68,9 @@ Background (same process):
 1. **`dotenv/config`** is imported — loads `.env` into `process.env`.
 2. **`validateEnv()`** checks that `MOZ_ACCESS_ID` and `MOZ_SECRET_KEY` are present. Missing variables abort the process immediately with a descriptive error — no silent failures.
 3. **`initDatabase()`** opens (or creates) the SQLite file at `DB_PATH` (default: `./backlinq.db`), sets WAL journal mode, and runs `CREATE TABLE IF NOT EXISTS` for all six cache tables. On failure the error is caught, logged to stderr, and the server continues without caching.
-4. **`runCacheWarmer()`** is awaited. It checks `isWarmCacheComplete()` — if the seed list was already warmed in a previous run it returns immediately; otherwise it fetches DA for ~1 000 well-known domains and marks completion in the DB. This runs before the HTTP server starts so the cache is populated before the first request arrives.
-5. **`startServer()`** starts the Express HTTP server on `PORT` (default: `8000`).
-6. **`startPreloadJob()`** registers the 24-hour background refresh interval with a 1-hour initial delay.
+4. **`startServer()`** starts the Express HTTP server on `PORT` (default: `8000`). The server is ready to accept requests at this point.
+5. **`startPreloadJob()`** registers the 24-hour background refresh interval with a 1-hour initial delay.
+6. **`runCacheWarmer()`** is fired in the background (not awaited). It checks `isWarmCacheComplete()` — if the seed list was already warmed in a previous run it returns immediately. On a first-ever boot it fetches DA for ~1 000 well-known domains sequentially and marks completion in the DB. Because it runs after the server is up, it never blocks incoming requests.
 
 ---
 

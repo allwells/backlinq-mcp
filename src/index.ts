@@ -23,9 +23,11 @@ function validateEnv(): void {
 async function main(): Promise<void> {
   validateEnv();
   initDatabase();
-  await runCacheWarmer();
   await startServer();
   startPreloadJob();
+  // Cache warmer runs in the background — server accepts requests immediately.
+  // On subsequent startups isWarmCacheComplete() returns true and it exits instantly.
+  void runCacheWarmer();
 }
 
 main().catch((err: unknown) => {
