@@ -17,7 +17,7 @@ This document explains how the server works at every level, from a raw HTTP requ
 9. [Tools](#tools)
 10. [Utility layer](#utility-layer)
 11. [Error handling](#error-handling)
-12. [Conclusions & improvements](#conclusions--improvements)
+12. [Conclusions](#conclusions)
 
 ---
 
@@ -120,6 +120,7 @@ A complete tool call goes through these steps:
 `src/utils/validator.ts` performs all domain validation before any adapter is touched.
 
 **`assertValidDomain(raw)`** rejects:
+
 - Strings shorter than 4 characters
 - Reserved hostnames: `localhost`, `local`, `lan`, `internal`, `intranet`, `home`, `broadcasthost`
 - Any IPv4 address (all ranges)
@@ -129,6 +130,7 @@ A complete tool call goes through these steps:
 - Anything failing the standard domain regex after cleaning
 
 **`cleanDomain(raw)`** normalises the accepted input:
+
 - Lowercases the entire string
 - Strips `http://` or `https://` prefix
 - Strips leading `www.`
@@ -148,12 +150,12 @@ There are two independent caching layers.
 
 `src/database.ts` manages four tables:
 
-| Table                    | Key    | Cached data                                             | TTL      |
-| ------------------------ | ------ | ------------------------------------------------------- | -------- |
-| `domain_authority_cache` | domain | `domainAuthority`, `spamScore`, `mozRank`, `linksIn`, `rootDomainsCount` | 24 hours |
-| `backlink_cache`         | domain | one row per `BacklinkEntry` (`url`, `timestamp`, `status`, `source`) | 7 days   |
-| `referring_domain_cache` | domain | one row per `ReferringDomain` (`domain`, `exampleUrl`, `lastSeen`, `backlinkCount`, `dofollowCount`) | 7 days   |
-| `query_log`              | —      | `domain`, `tool_name`, `cache_hit`, `queried_at`        | permanent |
+| Table                    | Key    | Cached data                                                                                          | TTL       |
+| ------------------------ | ------ | ---------------------------------------------------------------------------------------------------- | --------- |
+| `domain_authority_cache` | domain | `domainAuthority`, `spamScore`, `mozRank`, `linksIn`, `rootDomainsCount`                             | 24 hours  |
+| `backlink_cache`         | domain | one row per `BacklinkEntry` (`url`, `timestamp`, `status`, `source`)                                 | 7 days    |
+| `referring_domain_cache` | domain | one row per `ReferringDomain` (`domain`, `exampleUrl`, `lastSeen`, `backlinkCount`, `dofollowCount`) | 7 days    |
+| `query_log`              | —      | `domain`, `tool_name`, `cache_hit`, `queried_at`                                                     | permanent |
 
 Expiry is enforced at read time via a `WHERE expires_at > ?` clause — no background sweep needed. Writes use transactions for multi-row inserts (backlinks, referring domains) to keep them atomic.
 
@@ -212,6 +214,7 @@ Returns unique root domains linking to the target. Count fields are nested under
 Queries the Common Crawl CDX index using the pattern `*.domain/*` to find pages that were crawled under the given domain. The response is NDJSON — one JSON object per line.
 
 Two filtering passes clean the results:
+
 - **`isSelfEntry`** — removes records where the crawled URL belongs to the target domain itself (Common Crawl returns the target's own pages, not pages linking to it)
 - **`isSelfRedirect`** — removes HTTP 3xx records where the redirect source and destination are the same root domain (protocol/www normalisation redirects)
 
@@ -259,13 +262,13 @@ The winner is determined by a composite score: `mozRank + (domainAuthority / 10)
 
 ## Utility layer
 
-| File              | Role |
-| ----------------- | ---- |
-| `validator.ts`    | Domain validation and normalisation. Pure functions, no side effects. |
-| `formatter.ts`    | Combines adapter outputs into tool output shapes. Pure functions. |
-| `logger.ts`       | Structured stderr logger. All output goes to `stderr` — MCP stdio transport uses `stdout` for protocol messages and any accidental `console.log` would corrupt the stream. |
-| `cache.ts`        | In-memory TTL cache backed by a `Map`. Used only for Common Crawl results. |
-| `limiter.ts`      | Async semaphore. Caps concurrent Moz API calls at `MOZ_CONCURRENCY` (default 10). |
+| File           | Role                                                                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `validator.ts` | Domain validation and normalisation. Pure functions, no side effects.                                                                                                      |
+| `formatter.ts` | Combines adapter outputs into tool output shapes. Pure functions.                                                                                                          |
+| `logger.ts`    | Structured stderr logger. All output goes to `stderr` — MCP stdio transport uses `stdout` for protocol messages and any accidental `console.log` would corrupt the stream. |
+| `cache.ts`     | In-memory TTL cache backed by a `Map`. Used only for Common Crawl results.                                                                                                 |
+| `limiter.ts`   | Async semaphore. Caps concurrent Moz API calls at `MOZ_CONCURRENCY` (default 10).                                                                                          |
 
 ---
 
@@ -275,9 +278,14 @@ The design principle is: **a tool call must never crash the server or return an 
 
 ```typescript
 return {
-  content: [{ type: "text", text: JSON.stringify({ error: true, code: "...", message: "..." }) }],
+  content: [
+    {
+      type: "text",
+      text: JSON.stringify({ error: true, code: "...", message: "..." }),
+    },
+  ],
   isError: true,
-}
+};
 ```
 
 This guarantees the MCP client always receives a parseable JSON response regardless of what went wrong internally.
@@ -286,7 +294,7 @@ Adapter-level errors are not swallowed — they propagate up to the tool handler
 
 ---
 
-## Conclusions & improvements
+## Conclusions
 
 ### What works well
 
@@ -297,17 +305,3 @@ Adapter-level errors are not swallowed — they propagate up to the tool handler
 - **Graceful degradation.** DB failure → cache disabled, server still runs. Moz failure on `get_domain_authority` → stale cache returned with a note. Moz empty on tools 2 & 3 → Common Crawl fallback. The server never hard-fails due to an external dependency being unavailable.
 
 - **Stateless per-request server instances.** Creating a new `McpServer` per request is slightly wasteful on memory allocations, but it eliminates any possibility of state leaking between concurrent clients. For an MCP server where tool logic is entirely I/O-bound, this is the right trade-off.
-
-### What can be improved
-
-1. **Index URL is hardcoded.** `CC-MAIN-2026-08-index` in `commonCrawl.ts` needs a manual update every quarter. The Common Crawl [collinfo endpoint](https://index.commoncrawl.org/collinfo.json) lists all available indexes and could be queried at startup to always use the latest one.
-
-2. **TLD parsing is naive.** `extractRootDomain` and `normaliseToRootDomain` use a hand-rolled heuristic that handles `.co.uk` / `.com.au` style two-part TLDs but nothing else. A domain like `allwells.com.ng` would be incorrectly reduced. The `tldts` package (tiny, no network calls) would make this robust.
-
-3. **`backlink_cache` stores no metadata.** The tool's total backlink count and referring domain count come from `url_metrics` via `domain_authority_cache`, not from the backlink rows themselves. This means `get_backlink_profile` must always have both caches warm to serve a full cache hit. If `domain_authority_cache` has expired but `backlink_cache` is still valid, the tool makes a Moz call anyway. Storing `total_backlinks` and `referring_domains_count` as columns in `backlink_cache` (or as a small metadata row) would decouple the two caches.
-
-4. **`query_log` grows forever.** There is no cleanup. For a long-running deployment this table will accumulate indefinitely. A simple periodic `DELETE FROM query_log WHERE queried_at < ?` (e.g. keep 90 days) would keep it bounded.
-
-5. **`exampleUrl` for Moz referring domains is synthetic.** Moz's `/v2/linking_root_domains` endpoint does not return a specific linking page URL — only the root domain. The current code sets `exampleUrl` to `https://{root_domain}/`. This is clearly flagged in the Known Gaps section of the code but it is worth noting: if a consumer of the tool tries to visit the example URL expecting a page that actually links to the target, they may not find one.
-
-6. **`lastSeen` for Moz referring domains is the request timestamp.** Moz does not return a per-domain last-seen date from this endpoint. The field currently reflects when the query was made, not when the link was last indexed. This is a data accuracy limitation of the Moz API response, not a bug in the implementation.

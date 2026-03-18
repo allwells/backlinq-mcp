@@ -12,6 +12,7 @@ import type {
 } from "../types/index.js";
 import { logger } from "../utils/logger.js";
 import { withMozLimit } from "../utils/limiter.js";
+import { recordApiCall } from "../rateLimit.js";
 
 const BASE_URL = "https://lsapi.seomoz.com/v2";
 const TIMEOUT_MS = 25_000;
@@ -61,6 +62,7 @@ export async function getMozMetrics(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const startMs = Date.now();
 
   try {
     logger.info(`Fetching Moz url_metrics for ${domains.join(", ")}`, {
@@ -77,6 +79,8 @@ export async function getMozMetrics(
         }),
       }),
     );
+
+    recordApiCall("url_metrics", domains.join(","), response.status, Date.now() - startMs);
 
     if (!response.ok) {
       throw new Error(
@@ -111,6 +115,7 @@ export async function getMozMetrics(
     return typeof domainOrDomains === "string" ? normalized[0]! : normalized;
   } catch (err: unknown) {
     if ((err as { name?: string }).name === "AbortError") {
+      recordApiCall("url_metrics", domains.join(","), 0, Date.now() - startMs);
       throw new Error(
         `[${ADAPTER}] url_metrics timed out after ${TIMEOUT_MS}ms for: ${domains.join(", ")}`,
       );
@@ -134,6 +139,7 @@ export async function getMozLinks(
 ): Promise<readonly MozLink[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const startMs = Date.now();
 
   try {
     logger.info(`Fetching Moz links for ${domain} (limit=${limit})`, {
@@ -153,6 +159,8 @@ export async function getMozLinks(
       }),
     );
 
+    recordApiCall("links", domain, response.status, Date.now() - startMs);
+
     if (!response.ok) {
       throw new Error(
         `[${ADAPTER}] links API error ${response.status} for domain: ${domain}`,
@@ -168,6 +176,7 @@ export async function getMozLinks(
     return data.results;
   } catch (err: unknown) {
     if ((err as { name?: string }).name === "AbortError") {
+      recordApiCall("links", domain, 0, Date.now() - startMs);
       throw new Error(
         `[${ADAPTER}] links timed out after ${TIMEOUT_MS}ms for domain: ${domain}`,
       );
@@ -190,6 +199,7 @@ export async function getMozLinkingRootDomains(
 ): Promise<readonly MozLinkingRootDomain[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const startMs = Date.now();
 
   try {
     logger.info(
@@ -210,6 +220,8 @@ export async function getMozLinkingRootDomains(
       }),
     );
 
+    recordApiCall("linking_root_domains", domain, response.status, Date.now() - startMs);
+
     if (!response.ok) {
       throw new Error(
         `[${ADAPTER}] linking_root_domains API error ${response.status} for domain: ${domain}`,
@@ -225,6 +237,7 @@ export async function getMozLinkingRootDomains(
     return data.results;
   } catch (err: unknown) {
     if ((err as { name?: string }).name === "AbortError") {
+      recordApiCall("linking_root_domains", domain, 0, Date.now() - startMs);
       throw new Error(
         `[${ADAPTER}] linking_root_domains timed out after ${TIMEOUT_MS}ms for domain: ${domain}`,
       );

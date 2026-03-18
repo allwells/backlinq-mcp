@@ -2,6 +2,8 @@
 import "dotenv/config";
 import { startServer } from "./server.js";
 import { initDatabase } from "./database.js";
+import { runCacheWarmer } from "./jobs/warm-cache.js";
+import { startPreloadJob } from "./jobs/preload.js";
 
 const REQUIRED_ENV_VARS = [
   "MOZ_ACCESS_ID",
@@ -21,7 +23,9 @@ function validateEnv(): void {
 async function main(): Promise<void> {
   validateEnv();
   initDatabase();
+  await runCacheWarmer();
   await startServer();
+  startPreloadJob();
 }
 
 main().catch((err: unknown) => {

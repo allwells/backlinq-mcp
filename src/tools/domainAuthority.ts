@@ -15,6 +15,7 @@ import {
   setCachedDomainAuthority,
   logQuery,
 } from "../database.js";
+import { isApproachingLimit } from "../rateLimit.js";
 
 const TOOL_NAME = "get_domain_authority" as const;
 
@@ -95,6 +96,27 @@ export function registerDomainAuthorityTool(server: McpServer): void {
             structuredContent: output as unknown as Record<string, unknown>,
             content: [{ type: "text" as const, text: JSON.stringify(output) }],
           } as unknown as CallToolResult;
+        }
+
+        // ── Rate limit guard ──────────────────────────────────────────────────
+        if (isApproachingLimit()) {
+          const stale = getStaleCachedDomainAuthority(domain);
+          if (stale) {
+            logger.warn(`get_domain_authority: approaching rate limit, serving stale cache for ${domain}`);
+            const output = {
+              domain,
+              pageRank: Number(stale.mozRank),
+              rank: mozRankToTier(stale.mozRank),
+              domainAuthority: Number(stale.domainAuthority),
+              spamScore: Number(stale.spamScore),
+              linksIn: stale.linksIn !== undefined ? Number(stale.linksIn) : undefined,
+              note: "Data served from cache due to rate limit management — may be up to 24 hours old.",
+            };
+            return {
+              structuredContent: output as unknown as Record<string, unknown>,
+              content: [{ type: "text" as const, text: JSON.stringify(output) }],
+            } as unknown as CallToolResult;
+          }
         }
 
         // ── Moz API fetch ─────────────────────────────────────────────────────

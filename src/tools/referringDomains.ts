@@ -20,9 +20,13 @@ import { formatError } from "../utils/formatter.js";
 import { logger } from "../utils/logger.js";
 import {
   getCachedReferringDomains,
-  setCachedReferringDomains,
+  setCachedReferringDomainsRich,
+  getCachedReferringDomainsRich,
+  getStaleCachedReferringDomains,
   logQuery,
+  type RichReferringDomain,
 } from "../database.js";
+import { isApproachingLimit } from "../rateLimit.js";
 
 const TOOL_NAME = "get_referring_domains" as const;
 const CRAWL_FETCH_LIMIT = 200; // raw records to fetch before dedup
@@ -62,6 +66,27 @@ function extractReferringDomainsFromCrawl(
   }
 
   return Array.from(seen.values());
+}
+
+interface ReferringDomainIntelligence {
+  average_referring_da: number;
+  high_authority_count: number;
+  dofollow_domain_ratio: number;
+}
+
+function computeReferringDomainIntelligence(
+  domains: readonly RichReferringDomain[],
+): ReferringDomainIntelligence {
+  const total = domains.length;
+  if (total === 0) {
+    return { average_referring_da: 0, high_authority_count: 0, dofollow_domain_ratio: 0 };
+  }
+  const das = domains.map((d) => d.domainAuthority ?? 0);
+  const average_referring_da = Math.round(das.reduce((a, b) => a + b, 0) / total);
+  const high_authority_count = das.filter((da) => da > 60).length;
+  const dofollowDomains = domains.filter((d) => (d.dofollowCount ?? 0) > 0).length;
+  const dofollow_domain_ratio = Math.round((dofollowDomains / total) * 100);
+  return { average_referring_da, high_authority_count, dofollow_domain_ratio };
 }
 
 const inputSchema = {
@@ -110,6 +135,11 @@ const outputSchema = {
       }),
     )
     .describe("List of unique referring domains."),
+  referring_domain_intelligence: z.object({
+    average_referring_da: z.number().describe("Mean Domain Authority across all referring domains."),
+    high_authority_count: z.number().describe("Number of referring domains with DA above 60."),
+    dofollow_domain_ratio: z.number().describe("Percentage of referring domains with at least one dofollow link."),
+  }).optional().describe("Intelligence signals derived from Moz referring domain data."),
 };
 
 export function registerReferringDomainsTool(server: McpServer): void {
@@ -129,14 +159,21 @@ export function registerReferringDomainsTool(server: McpServer): void {
         logger.info(`get_referring_domains called for: ${domain} (limit=${limit})`);
 
         // ── Cache lookup ──────────────────────────────────────────────────────
-        const cachedDomains = getCachedReferringDomains(domain);
+        // Try rich cache first for intelligence data; fall back to basic cache
+        const richCachedDomains = getCachedReferringDomainsRich(domain);
+        const basicCachedDomains = richCachedDomains ? null : getCachedReferringDomains(domain);
+        const cachedDomains = richCachedDomains ?? basicCachedDomains;
         logQuery(domain, "get_referring_domains", !!cachedDomains);
         if (cachedDomains) {
           logger.info(`get_referring_domains: cache hit for ${domain}`);
-          const output: ReferringDomainsOutput = {
+          const referring_domain_intelligence = richCachedDomains
+            ? computeReferringDomainIntelligence(richCachedDomains)
+            : undefined;
+          const output = {
             domain,
             totalFound: cachedDomains.length,
             referringDomains: cachedDomains,
+            referring_domain_intelligence,
           };
           return {
             structuredContent: output as unknown as Record<string, unknown>,
@@ -144,8 +181,27 @@ export function registerReferringDomainsTool(server: McpServer): void {
           } as unknown as CallToolResult;
         }
 
+        // ── Rate limit guard ──────────────────────────────────────────────────
+        if (isApproachingLimit()) {
+          const stale = getStaleCachedReferringDomains(domain);
+          if (stale) {
+            logger.warn(`get_referring_domains: approaching rate limit, serving stale cache for ${domain}`);
+            const staleOutput = {
+              domain,
+              totalFound: stale.length,
+              referringDomains: stale,
+              note: "Data served from cache due to rate limit management — may be up to 24 hours old.",
+            };
+            return {
+              structuredContent: staleOutput as unknown as Record<string, unknown>,
+              content: [{ type: "text" as const, text: JSON.stringify(staleOutput) }],
+            } as unknown as CallToolResult;
+          }
+        }
+
         let referringDomains: readonly ReferringDomain[];
         let note: string | undefined;
+        let referring_domain_intelligence: ReferringDomainIntelligence | undefined;
 
         // ── Primary: Moz /v2/linking_root_domains ─────────────────────────────
         const mozResult = await getMozLinkingRootDomains(domain, limit).catch(
@@ -159,7 +215,7 @@ export function registerReferringDomainsTool(server: McpServer): void {
 
         if (mozResult && mozResult.length > 0) {
           const today = nowIso();
-          referringDomains = mozResult.map((d) => {
+          const richDomains: RichReferringDomain[] = mozResult.map((d) => {
             const pages = d.to_target?.pages;
             const nofollowPages = d.to_target?.nofollow_pages;
             const dofollowCount =
@@ -173,9 +229,12 @@ export function registerReferringDomainsTool(server: McpServer): void {
               source: "moz" as const,
               backlinkCount: pages,
               dofollowCount,
+              domainAuthority: d.domain_authority,
             };
           });
-          setCachedReferringDomains(domain, referringDomains);
+          referringDomains = richDomains;
+          setCachedReferringDomainsRich(domain, richDomains);
+          referring_domain_intelligence = computeReferringDomainIntelligence(richDomains);
           logger.info(
             `get_referring_domains: Moz returned ${referringDomains.length} referring domains for ${domain}`,
           );
@@ -234,11 +293,12 @@ export function registerReferringDomainsTool(server: McpServer): void {
             : "Moz returned no results; showing Common Crawl fallback data";
         }
 
-        const output: ReferringDomainsOutput & { note?: string } = {
+        const output = {
           domain,
           totalFound: referringDomains.length,
           referringDomains,
           note,
+          referring_domain_intelligence,
         };
 
         return {

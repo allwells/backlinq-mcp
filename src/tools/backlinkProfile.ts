@@ -17,11 +17,16 @@ import { formatBacklinkProfile, formatError } from "../utils/formatter.js";
 import { logger } from "../utils/logger.js";
 import {
   getCachedDomainAuthority,
+  getStaleCachedDomainAuthority,
   setCachedDomainAuthority,
   getCachedBacklinks,
-  setCachedBacklinks,
+  setCachedBacklinksRich,
+  getCachedBacklinksRich,
+  getStaleCachedBacklinks,
   logQuery,
+  type RichBacklink,
 } from "../database.js";
+import { isApproachingLimit } from "../rateLimit.js";
 
 const TOOL_NAME = "get_backlink_profile" as const;
 const DEFAULT_LIMIT = 20;
@@ -75,7 +80,57 @@ const outputSchema = {
   topBacklinks: z
     .array(backlinkEntrySchema)
     .describe("Sampled backlink entries."),
+  backlink_intelligence: z.object({
+    dofollow_ratio: z.number().describe("Percentage of dofollow backlinks (0–100)."),
+    spam_risk: z.enum(["low", "medium", "high"]).describe("Spam risk based on average DA of linking pages."),
+    top_anchor_texts: z.array(z.string()).describe("Top 5 most frequent anchor texts."),
+    authority_distribution: z.object({
+      "0-30": z.number(),
+      "31-60": z.number(),
+      "61-100": z.number(),
+    }).describe("Backlink count by domain authority tier."),
+  }).optional().describe("Intelligence signals derived from Moz backlink data."),
 };
+
+interface BacklinkIntelligence {
+  dofollow_ratio: number;
+  spam_risk: "low" | "medium" | "high";
+  top_anchor_texts: string[];
+  authority_distribution: { "0-30": number; "31-60": number; "61-100": number };
+}
+
+function computeBacklinkIntelligence(links: readonly RichBacklink[]): BacklinkIntelligence {
+  const total = links.length;
+  if (total === 0) {
+    return {
+      dofollow_ratio: 0,
+      spam_risk: "high",
+      top_anchor_texts: [],
+      authority_distribution: { "0-30": 0, "31-60": 0, "61-100": 0 },
+    };
+  }
+  const dofollowCount = links.filter((l) => !l.nofollow).length;
+  const dofollow_ratio = Math.round((dofollowCount / total) * 100);
+  const das = links.map((l) => l.sourceDomainAuthority ?? 0);
+  const avgDA = das.reduce((a, b) => a + b, 0) / das.length;
+  const spam_risk: "low" | "medium" | "high" = avgDA > 40 ? "low" : avgDA >= 20 ? "medium" : "high";
+  const anchorFreq = new Map<string, number>();
+  for (const link of links) {
+    const a = (link.anchorText ?? "").trim();
+    if (a) anchorFreq.set(a, (anchorFreq.get(a) ?? 0) + 1);
+  }
+  const top_anchor_texts = [...anchorFreq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([t]) => t);
+  const authority_distribution = { "0-30": 0, "31-60": 0, "61-100": 0 };
+  for (const da of das) {
+    if (da <= 30) authority_distribution["0-30"]++;
+    else if (da <= 60) authority_distribution["31-60"]++;
+    else authority_distribution["61-100"]++;
+  }
+  return { dofollow_ratio, spam_risk, top_anchor_texts, authority_distribution };
+}
 
 /** Convert MozRank to the rank tier string used across tools. */
 function mozRankToTier(mozRank: number): string {
@@ -106,7 +161,10 @@ export function registerBacklinkProfileTool(server: McpServer): void {
 
         // ── Cache lookup ──────────────────────────────────────────────────────
         const cachedMetrics = getCachedDomainAuthority(domain);
-        const cachedBacklinks = getCachedBacklinks(domain);
+        // Try rich cache first; fall back to basic cache for older entries
+        const richCachedBacklinks = getCachedBacklinksRich(domain);
+        const basicCachedBacklinks = richCachedBacklinks ? null : getCachedBacklinks(domain);
+        const cachedBacklinks = richCachedBacklinks ?? basicCachedBacklinks;
         const cacheHit = !!(cachedMetrics && cachedBacklinks);
         logQuery(domain, "get_backlink_profile", cacheHit);
 
@@ -114,7 +172,10 @@ export function registerBacklinkProfileTool(server: McpServer): void {
           logger.info(`get_backlink_profile: cache hit for ${domain}`);
           const pageRank = cachedMetrics.mozRank;
           const rank = mozRankToTier(pageRank);
-          const output: BacklinkProfile & { note?: string } = {
+          const backlink_intelligence = richCachedBacklinks
+            ? computeBacklinkIntelligence(richCachedBacklinks)
+            : undefined;
+          const output = {
             ...formatBacklinkProfile(domain, pageRank, rank, cachedBacklinks, {
               totalBacklinks: cachedMetrics.linksIn ?? cachedBacklinks.length,
               referringDomainsCount: cachedMetrics.rootDomainsCount ?? new Set(
@@ -123,11 +184,38 @@ export function registerBacklinkProfileTool(server: McpServer): void {
                 }),
               ).size,
             }),
+            backlink_intelligence,
           };
           return {
             structuredContent: output as unknown as Record<string, unknown>,
             content: [{ type: "text" as const, text: JSON.stringify(output) }],
           } as unknown as CallToolResult;
+        }
+
+        // ── Rate limit guard ──────────────────────────────────────────────────
+        if (isApproachingLimit()) {
+          const staleMetrics = getStaleCachedDomainAuthority(domain);
+          const staleBacklinks = getStaleCachedBacklinks(domain);
+          if (staleMetrics && staleBacklinks) {
+            logger.warn(`get_backlink_profile: approaching rate limit, serving stale cache for ${domain}`);
+            const pageRank = staleMetrics.mozRank;
+            const rank = mozRankToTier(pageRank);
+            const staleOutput = {
+              ...formatBacklinkProfile(domain, pageRank, rank, staleBacklinks, {
+                totalBacklinks: staleMetrics.linksIn ?? staleBacklinks.length,
+                referringDomainsCount: staleMetrics.rootDomainsCount ?? new Set(
+                  staleBacklinks.map((b) => {
+                    try { return new URL(b.url).hostname; } catch { return b.url; }
+                  }),
+                ).size,
+              }),
+              note: "Data served from cache due to rate limit management — may be up to 24 hours old.",
+            };
+            return {
+              structuredContent: staleOutput as unknown as Record<string, unknown>,
+              content: [{ type: "text" as const, text: JSON.stringify(staleOutput) }],
+            } as unknown as CallToolResult;
+          }
         }
 
         // ── Moz API fetch ─────────────────────────────────────────────────────
@@ -152,6 +240,7 @@ export function registerBacklinkProfileTool(server: McpServer): void {
         let totalBacklinks: number;
         let referringDomainsCount: number;
         let note: string | undefined;
+        let backlink_intelligence: BacklinkIntelligence | undefined;
 
         // ── Primary: Moz /v2/links ────────────────────────────────────────────
         if (
@@ -159,15 +248,20 @@ export function registerBacklinkProfileTool(server: McpServer): void {
           mozLinksSettled.value.length > 0
         ) {
           const mozLinks = mozLinksSettled.value;
-          backlinks = mozLinks.map((link) => ({
-            // source.page is the URL path without protocol; prepend https://
+          const richBacklinks: RichBacklink[] = mozLinks.map((link) => ({
             url: link.source.page.startsWith("http")
               ? link.source.page
               : `https://${link.source.page}`,
             timestamp: link.date_last_seen ?? new Date().toISOString(),
-            status: "N/A", // Moz does not provide per-backlink HTTP status codes
+            status: "N/A",
             source: "moz" as const,
+            anchorText: link.anchor_text ?? null,
+            sourceDomainAuthority: link.source.domain_authority ?? null,
+            nofollow: link.nofollow ?? false,
           }));
+          backlinks = richBacklinks;
+          setCachedBacklinksRich(domain, richBacklinks);
+          backlink_intelligence = computeBacklinkIntelligence(richBacklinks);
 
           // Use url_metrics counts for accurate totals (Moz index counts)
           totalBacklinks = mozMetrics.linksIn ?? backlinks.length;
@@ -176,7 +270,6 @@ export function registerBacklinkProfileTool(server: McpServer): void {
               try { return new URL(b.url).hostname; } catch { return b.url; }
             })).size;
 
-          setCachedBacklinks(domain, backlinks);
           logger.info(
             `get_backlink_profile: Moz returned ${mozLinks.length} backlinks for ${domain}`,
           );
@@ -247,12 +340,13 @@ export function registerBacklinkProfileTool(server: McpServer): void {
             : "Moz returned no results; showing Common Crawl fallback data";
         }
 
-        const output: BacklinkProfile & { note?: string } = {
+        const output = {
           ...formatBacklinkProfile(domain, pageRank, rank, backlinks, {
             totalBacklinks,
             referringDomainsCount,
           }),
           note,
+          backlink_intelligence,
         };
 
         return {
