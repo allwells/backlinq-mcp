@@ -16,6 +16,11 @@ function setTimeoutPromise(ms: number): Promise<void> {
 
 export async function runCacheWarmer(): Promise<void> {
   try {
+    if (process.env.SKIP_CACHE_WARM === "true") {
+      logger.info("Cache warmer: disabled via SKIP_CACHE_WARM, skipping");
+      return;
+    }
+
     if (isWarmCacheComplete()) {
       logger.info("Cache warmer: already complete, skipping");
       return;

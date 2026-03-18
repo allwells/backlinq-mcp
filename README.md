@@ -127,7 +127,7 @@ At 80% of the hourly limit, tools switch to serving stale cache data rather than
 
 Two jobs run in the server process to keep the cache warm:
 
-- **Cache warmer** — runs once on first deployment, seeds DA data for ~1 000 well-known domains so fresh installs have populated caches immediately.
+- **Cache warmer** — runs once ever (tracked by a DB flag), seeds DA data for ~1 000 well-known domains on a fresh install. If your DB is not persisted across deployments (e.g. ephemeral container storage), set `SKIP_CACHE_WARM=true` to disable it entirely and avoid burning Moz quota on every redeploy.
 - **Preload job** — runs every 24 hours (first run 1 hour after startup), finds the top-500 cache-miss domains whose DA data expires within 6 hours, and refreshes them proactively.
 
 ---
