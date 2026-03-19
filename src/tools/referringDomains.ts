@@ -165,7 +165,7 @@ export function registerReferringDomainsTool(server: McpServer): void {
         const cachedDomains = richCachedDomains ?? basicCachedDomains;
         logQuery(domain, "get_referring_domains", !!cachedDomains);
         if (cachedDomains) {
-          logger.info(`get_referring_domains: cache hit for ${domain}`);
+          logger.info(`get_referring_domains: cache HIT for ${domain}`);
           const referring_domain_intelligence = richCachedDomains
             ? computeReferringDomainIntelligence(richCachedDomains)
             : undefined;
@@ -180,6 +180,8 @@ export function registerReferringDomainsTool(server: McpServer): void {
             content: [{ type: "text" as const, text: JSON.stringify(output) }],
           } as unknown as CallToolResult;
         }
+
+        logger.info(`get_referring_domains: cache MISS for ${domain}`);
 
         // ── Rate limit guard ──────────────────────────────────────────────────
         if (isApproachingLimit()) {
@@ -204,7 +206,9 @@ export function registerReferringDomainsTool(server: McpServer): void {
         let referring_domain_intelligence: ReferringDomainIntelligence | undefined;
 
         // ── Primary: Moz /v2/linking_root_domains ─────────────────────────────
-        const mozResult = await getMozLinkingRootDomains(domain, limit).catch(
+        // Moz paid plan caps linking_root_domains at 50 results per request
+        const mozLimit = Math.min(limit, 50);
+        const mozResult = await getMozLinkingRootDomains(domain, mozLimit).catch(
           (err: unknown) => {
             logger.warn(
               `get_referring_domains: Moz failed for ${domain} (${err instanceof Error ? err.message : String(err)}), trying Common Crawl`,

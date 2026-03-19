@@ -83,7 +83,7 @@ export function registerDomainAuthorityTool(server: McpServer): void {
         const cached = getCachedDomainAuthority(domain);
         logQuery(domain, "get_domain_authority", !!cached);
         if (cached) {
-          logger.info(`get_domain_authority: cache hit for ${domain}`);
+          logger.info(`get_domain_authority: cache HIT for ${domain}`);
           const output: DomainAuthorityOutput = {
             domain,
             pageRank: Number(cached.mozRank),
@@ -97,6 +97,8 @@ export function registerDomainAuthorityTool(server: McpServer): void {
             content: [{ type: "text" as const, text: JSON.stringify(output) }],
           } as unknown as CallToolResult;
         }
+
+        logger.info(`get_domain_authority: cache MISS for ${domain}`);
 
         // ── Rate limit guard ──────────────────────────────────────────────────
         if (isApproachingLimit()) {

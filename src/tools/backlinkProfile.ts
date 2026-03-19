@@ -169,7 +169,7 @@ export function registerBacklinkProfileTool(server: McpServer): void {
         logQuery(domain, "get_backlink_profile", cacheHit);
 
         if (cacheHit) {
-          logger.info(`get_backlink_profile: cache hit for ${domain}`);
+          logger.info(`get_backlink_profile: cache HIT for ${domain}`);
           const pageRank = cachedMetrics.mozRank;
           const rank = mozRankToTier(pageRank);
           const backlink_intelligence = richCachedBacklinks
@@ -191,6 +191,8 @@ export function registerBacklinkProfileTool(server: McpServer): void {
             content: [{ type: "text" as const, text: JSON.stringify(output) }],
           } as unknown as CallToolResult;
         }
+
+        logger.info(`get_backlink_profile: cache MISS for ${domain}`);
 
         // ── Rate limit guard ──────────────────────────────────────────────────
         if (isApproachingLimit()) {
