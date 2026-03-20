@@ -195,8 +195,11 @@ If the database cannot be opened at startup, all cache functions return `null`/`
 `src/rateLimit.ts` provides budget-aware guards on top of the concurrency semaphore in `limiter.ts`.
 
 ```
-MOZ_HOURLY_LIMIT = process.env.MOZ_HOURLY_LIMIT || 200
-MOZ_DAILY_LIMIT  = process.env.MOZ_DAILY_LIMIT  || 2000
+MOZ_HOURLY_LIMIT                    = process.env.MOZ_HOURLY_LIMIT                    || 200
+MOZ_DAILY_LIMIT                     = process.env.MOZ_DAILY_LIMIT                     || 2000
+MOZ_CONCURRENCY                     = process.env.MOZ_CONCURRENCY                     || 10
+MOZ_DEFAULT_BACKLINKS_LIMIT         = process.env.MOZ_DEFAULT_BACKLINKS_LIMIT         || 20
+MOZ_DEFAULT_REFERRING_DOMAINS_LIMIT = process.env.MOZ_DEFAULT_REFERRING_DOMAINS_LIMIT || 20
 ```
 
 **How calls are tracked.** Every Moz adapter function (`getMozMetrics`, `getMozLinks`, `getMozLinkingRootDomains`) calls `recordApiCall(endpoint, domain, status, responseTimeMs)` after each request. This writes one row to the `moz_api_calls` table with a Unix timestamp. `getCallsInLastHour()` and `getCallsInLastDay()` query this table with a time-window `COUNT`.

@@ -53,6 +53,10 @@ Open `.env` and fill in your keys:
 MOZ_ACCESS_ID=your_access_id_here
 MOZ_SECRET_KEY=your_secret_key_here
 
+# Default result limit when callers omit the limit argument (default: 20, max: 100)
+MOZ_DEFAULT_BACKLINKS_LIMIT=20
+MOZ_DEFAULT_REFERRING_DOMAINS_LIMIT=20
+
 # Server port (default: 8000)
 PORT=8000
 
@@ -119,6 +123,7 @@ The server tracks every Moz API call in the `moz_api_calls` table and automatica
 ```env
 MOZ_HOURLY_LIMIT=200   # default
 MOZ_DAILY_LIMIT=2000   # default
+MOZ_CONCURRENCY=10     # default — max concurrent in-flight Moz requests
 ```
 
 At 80% of the hourly limit, tools switch to serving stale cache data rather than making new API calls. If no stale data exists for a domain, the live call proceeds regardless. Adjust the limits in `.env` to match your Moz plan.
