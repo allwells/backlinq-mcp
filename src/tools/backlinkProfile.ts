@@ -29,7 +29,7 @@ import {
 import { isApproachingLimit } from "../rateLimit.js";
 
 const TOOL_NAME = "get_backlink_profile" as const;
-const DEFAULT_LIMIT = 20;
+const DEFAULT_LIMIT = parseInt(process.env.MOZ_DEFAULT_BACKLINKS_LIMIT ?? "25", 10);
 const MAX_LIMIT = 100;
 
 const inputSchema = {

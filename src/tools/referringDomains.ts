@@ -30,6 +30,7 @@ import { isApproachingLimit } from "../rateLimit.js";
 
 const TOOL_NAME = "get_referring_domains" as const;
 const CRAWL_FETCH_LIMIT = 200; // raw records to fetch before dedup
+const DEFAULT_LIMIT = parseInt(process.env.MOZ_DEFAULT_REFERRING_DOMAINS_LIMIT ?? "25", 10);
 const MAX_LIMIT = 100;
 
 /** Current date as ISO string — used as lastSeen proxy for Moz results. */
@@ -99,7 +100,7 @@ const inputSchema = {
     .min(1)
     .max(MAX_LIMIT)
     .optional()
-    .describe(`Max number of unique referring domains to return (default ${MAX_LIMIT})`),
+    .describe(`Max number of unique referring domains to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT})`),
 };
 
 const outputSchema = {
@@ -155,7 +156,7 @@ export function registerReferringDomainsTool(server: McpServer): void {
       try {
         assertValidDomain(args.domain);
         const domain = cleanDomain(args.domain);
-        const limit = args.limit ?? MAX_LIMIT;
+        const limit = args.limit ?? DEFAULT_LIMIT;
         logger.info(`get_referring_domains called for: ${domain} (limit=${limit})`);
 
         // ── Cache lookup ──────────────────────────────────────────────────────
