@@ -4,6 +4,8 @@ Public-facing MCP (Model Context Protocol) server delivering Ahrefs/SEMrush-qual
 
 Listed on the [CTX Protocol marketplace](https://ctxprotocol.com). MCP endpoint: `https://mcp.backlinq.dev/mcp`
 
+Paid tool calls are authenticated via the CTX Protocol context middleware (`@ctxprotocol/sdk`). Discovery methods (`initialize`, `tools/list`) are open; `tools/call` requires a valid CTX JWT.
+
 ---
 
 ## MCP Tools

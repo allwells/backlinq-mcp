@@ -78,7 +78,7 @@ Background (same process):
 
 `src/server.ts` sets up two routes:
 
-**`POST /mcp`** — the MCP endpoint. Because the server is stateless, a new `McpServer` instance and a new `StreamableHTTPServerTransport` are created per request. No shared mutable state means concurrent requests cannot interfere with each other. The transport handles JSON-RPC framing, and `McpServer` dispatches tool calls to the registered handlers.
+**`POST /mcp`** — the MCP endpoint. Requests pass through `createContextMiddleware()` (from `@ctxprotocol/sdk`) before reaching the route handler. The middleware verifies CTX Protocol JWTs and populates `req.context` with the verified claims for paid `tools/call` invocations. Discovery methods (`initialize`, `tools/list`, `resources/list`, `prompts/list`) are allowed through unauthenticated. Because the server is stateless, a new `McpServer` instance and a new `StreamableHTTPServerTransport` are created per request. No shared mutable state means concurrent requests cannot interfere with each other. The transport handles JSON-RPC framing, and `McpServer` dispatches tool calls to the registered handlers.
 
 **`GET /health`** — returns `{ status: "OK", service: "Backlinq MCP", version: "1.2.0" }`. Used by the host process manager or uptime monitoring to confirm the process is alive.
 
@@ -93,40 +93,44 @@ A complete tool call goes through these steps:
    { "jsonrpc": "2.0", "id": 1, "method": "tools/call",
      "params": { "name": "get_domain_authority", "arguments": { "domain": "github.com" } } }
 
-2. StreamableHTTPServerTransport deserialises the request and routes it to McpServer.
+2. createContextMiddleware() verifies the CTX Protocol JWT. For open methods
+   (initialize, tools/list) it passes through. For tools/call it validates the
+   token and populates req.context — returning 401 if the token is missing or invalid.
 
-3. McpServer matches the tool name and calls the registered handler.
+3. StreamableHTTPServerTransport deserialises the request and routes it to McpServer.
 
-4. Handler: assertValidDomain(args.domain)
+4. McpServer matches the tool name and calls the registered handler.
+
+5. Handler: assertValidDomain(args.domain)
             → throws if invalid — caught and returned as isError: true JSON
 
-5. Handler: domain = cleanDomain(args.domain)
+6. Handler: domain = cleanDomain(args.domain)
             → strips protocol, www, trailing slashes, lowercases
 
-6. Handler: logQuery(domain, toolName, cacheHit)   [SQLite, fire-and-forget]
+7. Handler: logQuery(domain, toolName, cacheHit)   [SQLite, fire-and-forget]
 
-7. Handler: fresh cache lookup in SQLite
+8. Handler: fresh cache lookup in SQLite
             → HIT  → return immediately, no API call made
             → MISS → continue
 
-8. Handler: isApproachingLimit() check
+9. Handler: isApproachingLimit() check
             → if true AND stale cache exists → return stale data with note
             → if true AND no stale data     → continue to API call anyway
 
-9. Adapter call(s) through the async semaphore (withMozLimit)
+10. Adapter call(s) through the async semaphore (withMozLimit)
             → fetch Moz API with Basic auth + 25s timeout
             → recordApiCall() writes to moz_api_calls table
             → on success: write result to SQLite cache
             → on failure: fall back to Common Crawl (tools 2 & 3) or throw (tools 1 & 4)
 
-10. Enrichment computed from rich cache fields (anchor text, DA, link type)
+11. Enrichment computed from rich cache fields (anchor text, DA, link type)
             → backlink_intelligence, referring_domain_intelligence, verdict
 
-11. Formatter combines adapter result into the output schema shape.
+12. Formatter combines adapter result into the output schema shape.
 
-12. Handler returns { structuredContent: {...}, content: [{ type: "text", text: JSON.stringify(output) }] }
+13. Handler returns { structuredContent: {...}, content: [{ type: "text", text: JSON.stringify(output) }] }
 
-13. McpServer serialises the response and StreamableHTTPServerTransport writes it back
+14. McpServer serialises the response and StreamableHTTPServerTransport writes it back
     as SSE (text/event-stream) or JSON depending on the client's Accept header.
 ```
 

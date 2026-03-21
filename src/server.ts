@@ -6,6 +6,7 @@ import { registerBacklinkProfileTool } from "./tools/backlinkProfile.js";
 import { registerDomainAuthorityTool } from "./tools/domainAuthority.js";
 import { registerReferringDomainsTool } from "./tools/referringDomains.js";
 import { registerCompareDomainsTool } from "./tools/compareDomains.js";
+import { createContextMiddleware } from "@ctxprotocol/sdk";
 import type { Request, Response } from "express";
 
 const PORT = Number(process.env.PORT) || 8000;
@@ -27,9 +28,10 @@ export function createServer(): McpServer {
 export async function startServer(): Promise<void> {
   const app = express();
   app.use(express.json());
+  app.use("/mcp", createContextMiddleware());
 
   // Stateless MCP handler — each request gets its own transport + server instance
-  // This is safe because our tools are stateless (no shared mutable state)
+  // This is safe because the tools are stateless (no shared mutable state)
   app.post("/mcp", async (req: Request, res: Response) => {
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless mode
